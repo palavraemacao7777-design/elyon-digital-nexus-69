@@ -19,7 +19,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { supabase } from '@/integrations/supabase/client';
 import { Tables, TablesInsert, TablesUpdate } from '@/integrations/supabase/types';
 
-type MemberArea = Tables<'member_areas'>;
 type Product = Tables<'products'>;
 
 // Definir um tipo para o produto com os dados da área de membros associada
@@ -38,13 +37,11 @@ const AdminProducts = () => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isSavingDialog, setIsSavingDialog] = useState(false); // Renamed from isLoading for clarity
   const [products, setProducts] = useState<ProductWithMemberArea[]>([]); // Usar o novo tipo
-  const [memberAreas, setMemberAreas] = useState<MemberArea[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(true); // New state for page-level loading
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
-    price: '',
     logo: null as File | null,
     deliveryType: 'link' as 'link' | 'upload' | 'deliverableLink',
     memberAreaLink: '',
@@ -58,7 +55,6 @@ const AdminProducts = () => {
       price: 0,
       enabled: false
     }],
-    member_area_id: '' as string | null,
   });
 
   useEffect(() => {
@@ -67,10 +63,7 @@ const AdminProducts = () => {
     if (user) { // Qualquer usuário logado pode acessar
       const loadAllData = async () => {
         setLoadingProducts(true);
-        await Promise.all([
-          fetchProducts(),
-          fetchMemberAreas()
-        ]);
+        await fetchProducts();
         setLoadingProducts(false);
         console.log('ADMIN_PRODUCTS_DEBUG: All initial data loaded, setLoadingProducts(false).');
       };
@@ -85,7 +78,7 @@ const AdminProducts = () => {
     try {
       const { data, error } = await supabase
         .from('products')
-        .select('*, member_areas(name, slug)')
+        .select('*')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -102,27 +95,9 @@ const AdminProducts = () => {
   };
 
   const fetchMemberAreas = async () => {
-    console.log('ADMIN_PRODUCTS_DEBUG: fetchMemberAreas started.');
-    if (!user?.id) {
-      console.log('ADMIN_PRODUCTS_DEBUG: fetchMemberAreas skipped, no user ID.');
-      return;
-    }
-    try {
-      const { data, error } = await supabase
-        .from('member_areas')
-        .select('id, name, slug')
-        .eq('user_id', user.id);
-      if (error) throw error;
-      setMemberAreas(data as MemberArea[] || []);
-      console.log('ADMIN_PRODUCTS_DEBUG: fetchMemberAreas completed successfully.');
-    } catch (error: any) {
-      console.error('ADMIN_PRODUCTS_DEBUG: Erro ao carregar áreas de membros:', error);
-      toast({
-        title: "Erro",
-        description: error.message || "Não foi possível carregar as áreas de membros",
-        variant: "destructive"
-      });
-    }
+    // This function is kept for reference but no longer used
+    // Member area association is now managed in the member area creation page
+    return;
   };
 
   const uploadFile = async (file: File, folder: string) => {
@@ -206,10 +181,10 @@ const AdminProducts = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.name || !formData.description || !formData.price) {
+    if (!formData.name || !formData.description) {
       toast({
         title: "Erro",
-        description: "Nome, descrição e preço são obrigatórios",
+        description: "Nome e descrição são obrigatórios",
         variant: "destructive"
       });
       setIsSavingDialog(false);
@@ -267,10 +242,8 @@ const AdminProducts = () => {
 
       console.log('ADMIN_PRODUCTS_DEBUG: Dados para inserção no DB:', {
         user_id: user?.id,
-        member_area_id: formData.member_area_id,
         name: formData.name,
         description: formData.description,
-        price: parseInt(formData.price) * 100,
         logo_url: logoUrl,
         file_url: fileUrl,
         member_area_link: formData.deliveryType === 'link' ? formData.memberAreaLink : null,
@@ -281,14 +254,13 @@ const AdminProducts = () => {
         .from('products')
         .insert({
           user_id: user?.id,
-          member_area_id: formData.member_area_id || null,
           name: formData.name,
           description: formData.description,
-          price: parseInt(formData.price) * 100,
           logo_url: logoUrl,
           file_url: fileUrl,
           member_area_link: formData.deliveryType === 'link' ? formData.memberAreaLink : null,
           access_url: formData.accessUrl,
+          price: 0, // Valor padrão para evitar erro NOT NULL
         } as TablesInsert<'products'>);
 
       if (error) {
@@ -305,7 +277,6 @@ const AdminProducts = () => {
       setFormData({
         name: '',
         description: '',
-        price: '',
         logo: null,
         deliveryType: 'link',
         memberAreaLink: '',
@@ -341,7 +312,6 @@ const AdminProducts = () => {
     setFormData({
       name: product.name,
       description: product.description || '',
-      price: (product.price / 100).toString(),
       logo: null,
       deliveryType: product.member_area_link ? 'link' : (product.file_url && !product.file_url.startsWith('http') ? 'upload' : (product.file_url ? 'deliverableLink' : 'link')),
       memberAreaLink: product.member_area_link || '',
@@ -355,7 +325,6 @@ const AdminProducts = () => {
         price: 0,
         enabled: false
       }],
-      member_area_id: product.member_area_id || null,
     });
     setIsDialogOpen(true);
   };
@@ -388,10 +357,10 @@ const AdminProducts = () => {
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.name || !formData.description || !formData.price) {
+    if (!formData.name || !formData.description) {
       toast({
         title: "Erro",
-        description: "Nome, descrição e preço são obrigatórios",
+        description: "Nome e descrição são obrigatórios",
         variant: "destructive"
       });
       setIsSavingDialog(false);
@@ -459,10 +428,8 @@ const AdminProducts = () => {
       }
 
       console.log('ADMIN_PRODUCTS_DEBUG: Dados para atualização no DB:', {
-        member_area_id: formData.member_area_id,
         name: formData.name,
         description: formData.description,
-        price: parseInt(formData.price) * 100,
         logo_url: logoUrl,
         file_url: fileUrl,
         member_area_link: memberAreaLink,
@@ -472,10 +439,8 @@ const AdminProducts = () => {
       const { error } = await supabase
         .from('products')
         .update({
-          member_area_id: formData.member_area_id || null,
           name: formData.name,
           description: formData.description,
-          price: parseInt(formData.price) * 100,
           logo_url: logoUrl,
           file_url: fileUrl,
           member_area_link: memberAreaLink,
@@ -495,7 +460,6 @@ const AdminProducts = () => {
       setFormData({
         name: '',
         description: '',
-        price: '',
         logo: null,
         deliveryType: 'link',
         memberAreaLink: '',
@@ -509,7 +473,6 @@ const AdminProducts = () => {
           price: 0,
           enabled: false
         }],
-        member_area_id: null,
       });
 
       fetchProducts();
@@ -543,7 +506,6 @@ const AdminProducts = () => {
             setFormData({
               name: '',
               description: '',
-              price: '',
               logo: null,
               deliveryType: 'link',
               memberAreaLink: '',
@@ -557,7 +519,6 @@ const AdminProducts = () => {
                 price: 0,
                 enabled: false
               }],
-              member_area_id: null,
             });
           }
         }}>
@@ -567,7 +528,6 @@ const AdminProducts = () => {
               setFormData({
                 name: '',
                 description: '',
-                price: '',
                 logo: null,
                 deliveryType: 'link',
                 memberAreaLink: '',
@@ -581,7 +541,6 @@ const AdminProducts = () => {
                   price: 0,
                   enabled: false
                 }],
-                member_area_id: null,
               });
             }}>
               <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
@@ -608,58 +567,16 @@ const AdminProducts = () => {
                 </TabsList>
 
                 <TabsContent value="basic" className="space-y-4">
-                  <div className="grid grid-cols-1 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="memberArea">Área de Membros (Opcional)</Label>
-                      <Select 
-                        value={formData.member_area_id || "none"} 
-                        onValueChange={value => handleInputChange('member_area_id', value === "none" ? null : value)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Associar a uma área de membros" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">Nenhuma</SelectItem>
-                          {memberAreas.map(area => (
-                            <SelectItem key={area.id} value={area.id}>
-                              <div className="flex items-center gap-2">
-                                <MonitorDot className="h-4 w-4" />
-                                {area.name}
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-xs text-muted-foreground">
-                        Associe este produto a uma área de membros específica.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="name" className="text-sm font-medium">Nome do Produto *</Label>
-                      <Input 
-                        id="name" 
-                        value={formData.name} 
-                        onChange={e => handleInputChange('name', e.target.value)} 
-                        placeholder="Ex: Curso de Marketing Digital" 
-                        className="text-sm"
-                        required 
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="price" className="text-sm font-medium">Preço (R$) *</Label>
-                      <Input 
-                        id="price" 
-                        type="number" 
-                        value={formData.price} 
-                        onChange={e => handleInputChange('price', e.target.value)} 
-                        placeholder="97.00" 
-                        step="0.01" 
-                        className="text-sm"
-                        required 
-                      />
-                    </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="name" className="text-sm font-medium">Nome do Produto *</Label>
+                    <Input 
+                      id="name" 
+                      value={formData.name} 
+                      onChange={e => handleInputChange('name', e.target.value)} 
+                      placeholder="Ex: Curso de Marketing Digital" 
+                      className="text-sm"
+                      required 
+                    />
                   </div>
 
                   <div className="space-y-2">
@@ -933,16 +850,7 @@ const AdminProducts = () => {
                          <p className="text-muted-foreground text-xs sm:text-sm mb-2 line-clamp-2">
                            {product.description}
                          </p>
-                         {product.member_area_id && product.member_areas?.name && (
-                           <div className="flex items-center gap-1 text-xs text-muted-foreground mb-2">
-                             <MonitorDot className="h-3 w-3" />
-                             <span>Área: {product.member_areas.name}</span>
-                           </div>
-                         )}
-                         <div className="flex items-center justify-between">
-                           <span className="font-bold text-primary text-sm sm:text-base">
-                             R$ {(product.price / 100).toFixed(2)}
-                           </span>
+                         <div className="flex items-center justify-end">
                            <span className="text-xs text-muted-foreground">
                              {new Date(product.created_at).toLocaleDateString('pt-BR', {
                                day: '2-digit',

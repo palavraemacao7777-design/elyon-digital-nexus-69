@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 import { useState, useEffect } from 'react';
 import { useIntegrations } from './useIntegrations';
 import { loadMetaPixel, trackEvent } from '@/utils/metaPixelLoader';

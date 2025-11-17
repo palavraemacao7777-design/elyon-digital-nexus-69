@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
@@ -355,6 +355,11 @@ const Checkout = () => {
     setProcessing(true);
     
     try {
+      // Prevent attempting real payments when in preview mode
+      if (checkoutId === 'preview' || (checkout && checkout.id === 'preview')) {
+        throw new Error('Você está testando em modo PREVIEW. Não é possível processar pagamentos neste modo. Publique o checkout para testar pagamentos reais.');
+      }
+      
       const totalAmount = toCents(calculateTotal());
       console.log('CHECKOUT_FRONTEND_DEBUG: Calculated total (Reais):', calculateTotal(), typeof calculateTotal());
       console.log('CHECKOUT_FRONTEND_DEBUG: Total amount (cents) sent to Edge Function:', totalAmount, typeof totalAmount);

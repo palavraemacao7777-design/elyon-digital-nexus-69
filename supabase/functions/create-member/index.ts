@@ -15,8 +15,9 @@ interface CreateMemberRequest {
   checkoutId: string;
   paymentId: string;
   planType: string;
-  productIds: string[];
-  memberAreaId: string;
+  productIds?: string[];
+  memberAreaId?: string | null;
+  phone?: string | null;
 }
 
 interface CreateMemberResponse {
@@ -73,6 +74,7 @@ serve(async (req) => {
       planType,
       productIds,
       memberAreaId,
+      phone,
     } = payload;
 
     console.log("CREATE_MEMBER_DEBUG: Starting member creation", {
@@ -81,37 +83,61 @@ serve(async (req) => {
       productIds,
     });
 
-    // Fetch member_settings for password configuration
-    const { data: settingsData, error: settingsError } = await supabase
-      .from("member_settings")
-      .select("default_password_mode, default_fixed_password")
-      .eq("member_area_id", memberAreaId)
-      .single();
+      // Fetch member_settings for password configuration.
+      // If a memberAreaId wasn't provided, try to derive one from productIds.
+      let effectiveMemberAreaId: string | null = memberAreaId || null;
+      const prodIds = productIds || [];
+      if (!effectiveMemberAreaId && prodIds.length > 0) {
+        try {
+          for (const pid of prodIds) {
+            if (!pid) continue;
+            const { data: pRow } = await supabase
+              .from('products')
+              .select('member_area_id')
+              .eq('id', pid)
+              .maybeSingle();
+            if (pRow?.member_area_id) { effectiveMemberAreaId = pRow.member_area_id; break; }
+          }
+          if (!effectiveMemberAreaId) {
+            // Try member_areas that list the product in associated_products
+            const { data: areas } = await supabase
+              .from('member_areas')
+              .select('id')
+              .overlaps('associated_products', prodIds)
+              .limit(1);
+            if (areas && areas.length) effectiveMemberAreaId = areas[0].id;
+          }
+        } catch (e) {
+          console.warn('CREATE_MEMBER_DEBUG: erro ao derivar memberAreaId a partir de productIds', e);
+        }
+      }
 
-    if (settingsError && settingsError.code !== "PGRST116") {
-      console.error("CREATE_MEMBER_DEBUG: Error fetching settings", settingsError);
-      throw settingsError;
-    }
+      const { data: settingsData, error: settingsError } = await (effectiveMemberAreaId ?
+        supabase.from('member_settings').select('default_password_mode, default_fixed_password').eq('member_area_id', effectiveMemberAreaId).maybeSingle()
+        : Promise.resolve({ data: null, error: null } as any)
+      );
 
-    // Determine password based on mode
-    let password = "";
-    let forceChangePassword = false;
+      if (settingsError && settingsError.code !== 'PGRST116') {
+        console.error('CREATE_MEMBER_DEBUG: Error fetching settings', settingsError);
+      }
 
-    if (settingsData) {
-      const mode = settingsData.default_password_mode || "random";
-      if (mode === "fixed") {
-        password = settingsData.default_fixed_password || generateRandomPassword();
-      } else if (mode === "force_change") {
-        password = generateRandomPassword();
-        forceChangePassword = true;
+      // Determine password based on mode
+      let password = '';
+      let forceChangePassword = false;
+
+      if (settingsData && settingsData.default_password_mode) {
+        const mode = settingsData.default_password_mode || 'random';
+        if (mode === 'fixed') {
+          password = settingsData.default_fixed_password || generateRandomPassword();
+        } else if (mode === 'force_change') {
+          password = generateRandomPassword();
+          forceChangePassword = true;
+        } else {
+          password = generateRandomPassword();
+        }
       } else {
-        // random (default)
         password = generateRandomPassword();
       }
-    } else {
-      // Default to random if no settings
-      password = generateRandomPassword();
-    }
 
     console.log("CREATE_MEMBER_DEBUG: Password mode determined", {
       mode: settingsData?.default_password_mode || "random",
@@ -148,18 +174,45 @@ serve(async (req) => {
       if (authMsg && authMsg.toLowerCase().includes('duplicate')) {
         // try to find existing member entry
         try {
-          const { data: existingMember } = await supabase
-            .from('members')
-            .select('id, user_id')
+          // First try to find an existing profile linked to this email
+          const { data: existingProfile } = await supabase
+            .from('profiles')
+            .select('user_id')
             .eq('email', email)
             .maybeSingle();
 
-          if (existingMember && existingMember.user_id) {
-            userId = existingMember.user_id;
-            console.log('CREATE_MEMBER_DEBUG: Found existing member record for email, using user_id', { userId, memberId: existingMember.id });
+          if (existingProfile && existingProfile.user_id) {
+            userId = existingProfile.user_id;
+            console.log('CREATE_MEMBER_DEBUG: Found existing profile for email, using user_id', { userId });
           } else {
-            console.warn('CREATE_MEMBER_DEBUG: No member record found for duplicate email; cannot auto-create auth user.');
-            return new Response(JSON.stringify({ success: false, error: 'E-mail já cadastrado. Faça login ou recupere a senha.' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 409 });
+            // Fallback: try to locate an existing member record
+            const { data: existingMember } = await supabase
+              .from('members')
+              .select('id, user_id')
+              .eq('email', email)
+              .maybeSingle();
+
+            if (existingMember && existingMember.user_id) {
+              userId = existingMember.user_id;
+              console.log('CREATE_MEMBER_DEBUG: Found existing member record for email, using user_id', { userId, memberId: existingMember.id });
+            } else {
+              // As a last resort, attempt to find the auth user via admin API list (best-effort)
+              try {
+                const listRes = await adminClient.auth.admin.listUsers();
+                const found = (listRes?.users || []).find((u: any) => (u.email || '').toLowerCase() === (email || '').toLowerCase());
+                if (found && found.id) {
+                  userId = found.id;
+                  console.log('CREATE_MEMBER_DEBUG: Found auth user via admin.listUsers fallback', { userId });
+                }
+              } catch (listErr) {
+                console.warn('CREATE_MEMBER_DEBUG: admin.listUsers fallback failed', listErr);
+              }
+            }
+
+            if (!userId) {
+              console.warn('CREATE_MEMBER_DEBUG: No user_id found after duplicate email handling; returning conflict to caller.');
+              return new Response(JSON.stringify({ success: false, error: 'E-mail já cadastrado. Faça login ou recupere a senha.' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 409 });
+            }
           }
         } catch (e) {
           console.error('CREATE_MEMBER_DEBUG: Error while looking up existing member for duplicate email', e);
@@ -182,44 +235,77 @@ serve(async (req) => {
       throw new Error('User id not available to create member record');
     }
 
-    // Try to create member record only if we don't already have one
+    // Try to find existing member record by email
     const { data: existingMemberCheck } = await supabase
       .from('members')
-      .select('id')
+      .select('id, user_id, password_hash')
       .eq('email', email)
       .maybeSingle();
 
     if (existingMemberCheck && existingMemberCheck.id) {
       memberId = existingMemberCheck.id;
-      console.log('CREATE_MEMBER_DEBUG: Found existing member record, will reuse', { memberId });
+      console.log('CREATE_MEMBER_DEBUG: Found existing member record, will update/ reuse', { memberId });
+
+      // Update member record with latest checkout/payment and plan info
+      try {
+        const updatePayload: any = {
+          user_id: userId,
+          name,
+          checkout_id: checkoutId,
+          payment_id: paymentId,
+          plan_type: planType,
+          phone: phone || null,
+          status: 'active',
+          updated_at: new Date().toISOString()
+        };
+
+        // If existing record had no password_hash, set it
+        if (!existingMemberCheck.password_hash) {
+          updatePayload.password_hash = passwordHash;
+        }
+
+        const { error: memberUpdateError } = await supabase
+          .from('members')
+          .update(updatePayload)
+          .eq('id', memberId);
+
+        if (memberUpdateError) {
+          console.error('CREATE_MEMBER_DEBUG: Failed to update existing member record', memberUpdateError);
+        } else {
+          console.log('CREATE_MEMBER_DEBUG: Existing member record updated', { memberId });
+        }
+      } catch (updateErr) {
+        console.error('CREATE_MEMBER_DEBUG: Exception updating existing member', updateErr);
+      }
     } else {
       const { data: memberData, error: memberError } = await supabase
-        .from("members")
+        .from('members')
         .insert({
           user_id: userId,
           name,
           email,
+          phone: phone || null,
           password_hash: passwordHash,
           checkout_id: checkoutId,
           payment_id: paymentId,
           plan_type: planType,
-          status: "active",
+          status: 'active',
         })
         .select()
         .single();
 
       if (memberError) {
-        console.error("CREATE_MEMBER_DEBUG: Member record creation failed", memberError);
+        console.error('CREATE_MEMBER_DEBUG: Member record creation failed', memberError);
         throw new Error(`Failed to create member record: ${memberError.message}`);
       }
 
       memberId = memberData.id;
-      console.log("CREATE_MEMBER_DEBUG: Member record created", { memberId });
+      console.log('CREATE_MEMBER_DEBUG: Member record created', { memberId });
     }
 
     // Grant access to products
-    if (productIds && productIds.length > 0) {
-      const memberAccessRecords = productIds.map((productId: string) => ({
+      if (prodIds && prodIds.length > 0) {
+      const memberAccessRecords = prodIds.map((productId: string) => ({
         member_id: memberId,
         product_id: productId,
         status: "active",
@@ -236,9 +322,98 @@ serve(async (req) => {
 
       console.log("CREATE_MEMBER_DEBUG: Product access granted", {
         memberId,
-        productCount: productIds.length,
+          productCount: prodIds.length,
       });
     }
+
+      // ===== NOVO: Conceder acesso aos módulos das áreas de membros associadas aos produtos =====
+      try {
+        // Resolver member_area_ids a partir dos productIds
+        const memberAreaIdsSet = new Set<string>();
+        for (const pid of prodIds || []) {
+          if (!pid) continue;
+          try {
+            const { data: productRow, error: prodErr } = await supabase
+              .from('products')
+              .select('id, member_area_id')
+              .eq('id', pid)
+              .maybeSingle();
+            if (prodErr) console.warn('CREATE_MEMBER_DEBUG: Erro ao buscar product durante resolução de member areas', prodErr);
+            if (productRow?.member_area_id) memberAreaIdsSet.add(productRow.member_area_id);
+
+            const { data: areas, error: areasErr } = await supabase
+              .from('member_areas')
+              .select('id')
+              .overlaps('associated_products', [pid]);
+            if (areasErr) console.warn('CREATE_MEMBER_DEBUG: Erro ao buscar member_areas por associated_products', areasErr);
+            if (areas && areas.length) areas.forEach((a: any) => a?.id && memberAreaIdsSet.add(a.id));
+          } catch (e) {
+            console.error('CREATE_MEMBER_DEBUG: Exceção ao resolver member areas para product', pid, e);
+          }
+        }
+
+        const memberAreaIds = Array.from(memberAreaIdsSet);
+        if (memberAreaIds.length > 0) {
+          // Buscar módulos publicados para cada área de membro
+          const moduleIdsSet = new Set<string>();
+          for (const maId of memberAreaIds) {
+            try {
+              const { data: modulesForArea, error: modulesErr } = await supabase
+                .from('modules')
+                .select('id')
+                .eq('member_area_id', maId)
+                .eq('status', 'published');
+              if (modulesErr) {
+                console.warn('CREATE_MEMBER_DEBUG: Erro ao buscar módulos publicados para área', maId, modulesErr);
+              } else if (modulesForArea && modulesForArea.length) {
+                modulesForArea.forEach((m: any) => m?.id && moduleIdsSet.add(m.id));
+              }
+            } catch (e) {
+              console.error('CREATE_MEMBER_DEBUG: Exceção ao buscar módulos para área', maId, e);
+            }
+          }
+
+          const moduleIds = Array.from(moduleIdsSet);
+          if (moduleIds.length > 0) {
+            // Tentar inserir por member_id + module_id (quando schema usa member_id)
+            const insertsByMember = moduleIds.map(mid => ({ member_id: memberId, module_id: mid }));
+            try {
+              const { error: insertErr } = await supabase
+                .from('member_access')
+                .upsert(insertsByMember, { onConflict: 'member_id,module_id' });
+              if (insertErr) throw insertErr;
+              console.log('CREATE_MEMBER_DEBUG: Acesso aos módulos concedido (member_id/module_id)', { memberId, moduleCount: moduleIds.length });
+            } catch (e) {
+              console.warn('CREATE_MEMBER_DEBUG: Inserção por (member_id,module_id) falhou, tentando fallback por (user_id,module_id):', (e as any)?.message || e);
+              // Fallback: tentar inserir por user_id + module_id + member_area_id (quando schema usa user_id)
+              try {
+                const insertsByUser: any[] = [];
+                for (const mid of moduleIds) {
+                  for (const maId of memberAreaIds) {
+                    insertsByUser.push({ user_id: userId, module_id: mid, member_area_id: maId, is_active: true });
+                  }
+                }
+                if (insertsByUser.length > 0) {
+                  const { error: insertUserErr } = await supabase
+                    .from('member_access')
+                    .upsert(insertsByUser, { onConflict: 'user_id,module_id' });
+                  if (insertUserErr) throw insertUserErr;
+                  console.log('CREATE_MEMBER_DEBUG: Acesso aos módulos concedido (user_id/module_id)', { userId, moduleCount: moduleIds.length });
+                }
+              } catch (e2) {
+                console.error('CREATE_MEMBER_DEBUG: Falha ao conceder acesso aos módulos (ambos os métodos):', e2);
+              }
+            }
+          } else {
+            console.log('CREATE_MEMBER_DEBUG: Nenhum módulo publicado encontrado para as áreas de membros derivadas dos produtos.');
+          }
+        } else {
+          console.log('CREATE_MEMBER_DEBUG: Nenhuma área de membros encontrada a partir dos produtos comprados.');
+        }
+      } catch (e) {
+        console.error('CREATE_MEMBER_DEBUG: Erro ao tentar conceder acesso a módulos a partir dos produtos:', e);
+      }
+
 
     const response: CreateMemberResponse = {
       success: true,

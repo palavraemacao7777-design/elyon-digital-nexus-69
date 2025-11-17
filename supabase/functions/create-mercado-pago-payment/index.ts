@@ -102,10 +102,10 @@ serve(async (req) => {
       );
     }
 
-    // Get the checkout to find the selected Mercado Pago account
+    // Get the checkout to find the selected Mercado Pago account and member_area_id
     const { data: checkout, error: checkoutError } = await supabase
       .from('checkouts')
-      .select('integrations, user_id, form_fields, products(name, member_area_link, file_url)') // Selecionar form_fields e dados do produto
+      .select('id, user_id, member_area_id, integrations, form_fields, products(name, member_area_link, file_url)') // Include member_area_id
       .eq('id', checkoutId)
       .single();
 
@@ -152,7 +152,7 @@ serve(async (req) => {
     }
 
     // Construir o body da requisição para o Mercado Pago
-    let mpRequestBody: any = {
+    const mpRequestBody: any = {
       transaction_amount: transactionAmountInReais,
       description: `Pagamento Checkout ${checkoutId}`,
       payer: {
@@ -355,6 +355,77 @@ serve(async (req) => {
       );
     }
     console.log('CREATE_MP_PAYMENT_DEBUG: 19. Payment saved to DB:', JSON.stringify(payment, null, 2));
+
+    // ===== AUTO-CREATE MEMBER ACCESS IF PAYMENT APPROVED =====
+    // Automatically grant access to member areas based on the purchased products
+    if (paymentStatus === 'completed' && customerData.email) {
+      console.log('CREATE_MP_PAYMENT_DEBUG: Payment approved, attempting to grant member access based on purchased products for email:', customerData.email);
+      try {
+        // Get purchased product ids from payment metadata (persistido durante a criação do pagamento)
+        const purchasedProductIds: string[] = (payment?.metadata as any)?.purchased_product_ids || [];
+
+        // Collect member area IDs derived from products (product.member_area_id) and member_areas.associated_products
+        const memberAreaIdsSet = new Set<string>();
+
+        for (const productId of purchasedProductIds) {
+          if (!productId) continue;
+          try {
+            const { data: productRow, error: prodErr } = await supabase
+              .from('products')
+              .select('id, member_area_id')
+              .eq('id', productId)
+              .maybeSingle();
+            if (prodErr) {
+              console.warn('CREATE_MP_PAYMENT_DEBUG: Error fetching product for access grant', prodErr);
+            }
+            if (productRow?.member_area_id) memberAreaIdsSet.add(productRow.member_area_id);
+
+            // Find member areas that include this product in associated_products
+            const { data: areas, error: areasErr } = await supabase
+              .from('member_areas')
+              .select('id')
+              .overlaps('associated_products', [productId]);
+            if (areasErr) {
+              console.warn('CREATE_MP_PAYMENT_DEBUG: Error fetching member_areas by associated_products', areasErr);
+            }
+            if (areas && areas.length) areas.forEach((a: any) => a?.id && memberAreaIdsSet.add(a.id));
+          } catch (e) {
+            console.error('CREATE_MP_PAYMENT_DEBUG: Exception while resolving member areas for product', productId, e);
+          }
+        }
+
+        const memberAreaIds = Array.from(memberAreaIdsSet);
+        if (memberAreaIds.length === 0) {
+          console.log('CREATE_MP_PAYMENT_DEBUG: No member areas found for purchased products; will still attempt member creation from productIds.');
+        }
+
+        // Chamar create-member uma vez com os dados mínimos (nome e email) e os productIds
+        try {
+          const { data: createRes, error: createErr } = await supabase.functions.invoke('create-member', {
+            body: {
+              name: customerData.name || checkout?.form_fields?.name || 'Cliente',
+              email: customerData.email,
+              checkoutId: checkoutId,
+              paymentId: payment?.id || mpResult.id,
+              planType: 'standard',
+              productIds: purchasedProductIds
+            }
+          });
+
+          if (createErr) {
+            console.error('CREATE_MP_PAYMENT_DEBUG: create-member returned error:', createErr);
+          } else if (createRes?.success) {
+            console.log('CREATE_MP_PAYMENT_DEBUG: create-member succeeded:', { memberId: createRes.memberId, userId: createRes.userId });
+          } else {
+            console.warn('CREATE_MP_PAYMENT_DEBUG: create-member did not return success:', createRes);
+          }
+        } catch (e) {
+          console.error('CREATE_MP_PAYMENT_DEBUG: Exception invoking create-member:', e);
+        }
+      } catch (accessError) {
+        console.error('CREATE_MP_PAYMENT_DEBUG: Exception while creating member access based on products:', accessError);
+      }
+    }
 
     const responsePayload = {
       success: true,

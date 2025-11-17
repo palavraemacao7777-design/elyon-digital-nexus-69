@@ -243,10 +243,11 @@ async function processApprovedPayment(
       produto = null;
     }
   }
-
+  let skipMemberProvision = false;
   if (!produto) {
     console.error('❌ Produto não encontrado ou inativo:', produtoId);
-    throw new Error('Produto não encontrado ou inativo no banco de dados');
+    // Não interromper o fluxo: registrar que não foi possível provisionar membro
+    skipMemberProvision = true;
   }
 
   // Se não encontrou o user_id no produto, tentar buscar pela member_area
@@ -311,8 +312,11 @@ async function processApprovedPayment(
 
   console.log('💾 Compra registrada:', compra.id);
 
-  // Tentar criar membro automaticamente na área de membros
+  // Tentar criar membro automaticamente na área de membros (pular se produto não encontrado)
   try {
+    if (skipMemberProvision) {
+      console.warn('CREATE_MEMBER_DEBUG: Pulando provisionamento de membro porque o produto/associação não foi encontrado. compra id:', compra.id);
+    } else {
     console.log('CREATE_MEMBER_DEBUG: Iniciando criação automática de membro para compra:', compra.id);
 
     const memberAreaIds: string[] = [];
@@ -346,51 +350,40 @@ async function processApprovedPayment(
     const uniqueProductIds = Array.from(new Set(productIds));
     let memberPassword: string | null = null;
 
-    if (uniqueMemberAreaIds.length > 0 && clienteEmail) {
-      for (const memberAreaId of uniqueMemberAreaIds) {
-        try {
-          // Chamar nova função create-member com configuração de senha
-          const { data: createRes, error: createErr } = await supabase.functions.invoke('create-member', {
-            body: {
-              name: clienteNome,
-              email: clienteEmail,
-              checkoutId: paymentDetails.external_reference, // ID do checkout
-              paymentId: paymentId,
-              planType: produto.nome || 'standard',
-              productIds: uniqueProductIds,
-              memberAreaId: memberAreaId
-            }
-          });
-
-          if (createErr) {
-            console.error('CREATE_MEMBER_DEBUG: create-member retornou erro:', createErr);
-            // Continuar com próxima área mesmo se houver erro
-            continue;
+    // Preferir criar o membro uma vez com os dados mínimos configurados no checkout (nome + email)
+    if (uniqueProductIds.length > 0 && clienteEmail) {
+      try {
+        const { data: createRes, error: createErr } = await supabase.functions.invoke('create-member', {
+          body: {
+            name: clienteNome,
+            email: clienteEmail,
+            checkoutId: paymentDetails.external_reference,
+            paymentId: paymentId,
+            planType: produto.nome || 'standard',
+            productIds: uniqueProductIds
           }
+        });
 
-          if (createRes?.success) {
-            console.log('CREATE_MEMBER_DEBUG: Membro criado com sucesso:', {
-              memberId: createRes.memberId,
-              userId: createRes.userId
-            });
-            // Capturar a senha retornada para enviar por email
-            if (createRes.password) {
-              memberPassword = createRes.password;
-            }
-          } else {
-            console.error('CREATE_MEMBER_DEBUG: create-member não retornou sucesso:', createRes?.error);
-          }
-
-        } catch (maErr) {
-          console.error('CREATE_MEMBER_DEBUG: erro ao invocar create-member', maErr);
+        if (createErr) {
+          console.error('CREATE_MEMBER_DEBUG: create-member retornou erro:', createErr);
         }
+
+        if (createRes?.success) {
+          console.log('CREATE_MEMBER_DEBUG: Membro criado/atualizado com sucesso:', { memberId: createRes.memberId, userId: createRes.userId });
+          if (createRes.password) memberPassword = createRes.password;
+        } else if (createRes && !createRes.success) {
+          console.error('CREATE_MEMBER_DEBUG: create-member não retornou sucesso:', createRes?.error);
+        }
+      } catch (maErr) {
+        console.error('CREATE_MEMBER_DEBUG: erro ao invocar create-member', maErr);
       }
     } else {
-      console.log('CREATE_MEMBER_DEBUG: Nenhuma member area associada ao produto ou email do cliente ausente');
+      console.log('CREATE_MEMBER_DEBUG: Nenhum produto comprado ou email do cliente ausente; pular criação de membro');
     }
 
-    // Passar a senha do membro para o email
-    compra.memberPassword = memberPassword;
+      // Passar a senha do membro para o email
+      compra.memberPassword = memberPassword;
+    }
   } catch (memberErr) {
     console.error('CREATE_MEMBER_DEBUG: Erro no fluxo de criação automática de membro:', memberErr);
   }
@@ -441,7 +434,7 @@ async function sendDeliverableEmail(
     }
 
     // Preparar corpo do email com a senha do membro
-    let emailSubject = produto.email_assunto || `Bem-vindo ao ${produto.nome}!`;
+    const emailSubject = produto.email_assunto || `Bem-vindo ao ${produto.nome}!`;
     let emailBody = '';
 
     if (compra.memberPassword) {

@@ -16,7 +16,7 @@ import CountdownTimer from './CountdownTimer';
 import { CreditCardForm } from './CreditCardForm';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 import React, { useState } from 'react';
 
 const HorizontalLayout = ({

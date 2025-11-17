@@ -212,7 +212,7 @@ const AdminMemberAreas = () => {
         
         const { data: settingsData, error: settingsError } = await supabase
           .from('member_settings')
-          .upsert(settingsPayload)
+          .upsert(settingsPayload, { onConflict: 'member_area_id' })
           .select();
         
         console.log('ADMIN_MEMBER_AREAS_DEBUG: Settings save result:', { data: settingsData, error: settingsError });

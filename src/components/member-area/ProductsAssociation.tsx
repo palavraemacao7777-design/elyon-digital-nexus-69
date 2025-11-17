@@ -4,9 +4,9 @@ import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
+import { useAuth } from '@/hooks/useAuth';
 import { Package, Save } from 'lucide-react';
-import { Tables } from '@/integrations/supabase/types';
-import { useAuth } from '@/hooks/useAuth'; // Import useAuth
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 type Product = Tables<'products'>;
 type MemberArea = Tables<'member_areas'>;
@@ -17,12 +17,14 @@ interface ProductsAssociationProps {
 
 const ProductsAssociation: React.FC<ProductsAssociationProps> = ({ memberAreaId }) => {
   const { toast } = useToast();
-  const { user, loading: authLoading } = useAuth(); // Use useAuth to get the current user
+  const { user, loading: authLoading } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
   const [memberArea, setMemberArea] = useState<MemberArea | null>(null);
   const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [showAssociate, setShowAssociate] = useState(false);
+  const [productToAssociate, setProductToAssociate] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && user) { // Ensure user is loaded and authenticated
@@ -101,6 +103,17 @@ const ProductsAssociation: React.FC<ProductsAssociationProps> = ({ memberAreaId 
     }
   };
 
+  // Produtos não associados
+  const unassociatedProducts = products.filter(p => !selectedProducts.includes(p.id));
+
+  const handleAssociateProduct = () => {
+    if (productToAssociate) {
+      setSelectedProducts(prev => [...prev, productToAssociate]);
+      setProductToAssociate(null);
+      setShowAssociate(false);
+    }
+  };
+
   if (loading) {
     return (
       <Card>
@@ -122,9 +135,36 @@ const ProductsAssociation: React.FC<ProductsAssociationProps> = ({ memberAreaId 
           <Package className="h-5 w-5" />
           Produtos Associados
         </CardTitle>
-        <CardDescription className="text-sm sm:text-base">
+        <CardDescription className="text-sm sm:text-base mt-2">
           Selecione quais produtos darão acesso a esta área de membros quando forem comprados
         </CardDescription>
+        <div className="mt-4 mb-2">
+          {!showAssociate && unassociatedProducts.length > 0 && (
+            <Button size="sm" variant="outline" onClick={() => setShowAssociate(true)}>
+              Associar Produto Existente
+            </Button>
+          )}
+          {showAssociate && (
+            <div className="flex gap-2 items-center mt-2">
+              <Select value={productToAssociate || ''} onValueChange={setProductToAssociate}>
+                <SelectTrigger className="w-64">
+                  <SelectValue placeholder="Selecione um produto" />
+                </SelectTrigger>
+                <SelectContent>
+                  {unassociatedProducts.map(prod => (
+                    <SelectItem key={prod.id} value={prod.id}>{prod.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button size="sm" onClick={handleAssociateProduct} disabled={!productToAssociate}>
+                Associar
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => { setShowAssociate(false); setProductToAssociate(null); }}>
+                Cancelar
+              </Button>
+            </div>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         {products.length === 0 ? (
@@ -149,9 +189,6 @@ const ProductsAssociation: React.FC<ProductsAssociationProps> = ({ memberAreaId 
                     className="flex-1 cursor-pointer"
                   >
                     <div className="font-medium text-sm sm:text-base">{product.name}</div>
-                    <div className="text-xs sm:text-sm text-muted-foreground">
-                      R$ {(product.price / 100).toFixed(2)}
-                    </div>
                   </label>
                 </div>
               ))}

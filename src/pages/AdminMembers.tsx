@@ -239,17 +239,80 @@ const AdminMembers = ({ memberAreaId: propMemberAreaId }: { memberAreaId?: strin
   const fetchMembers = async () => {
     console.log('ADMIN_MEMBERS_DEBUG: fetchMembers started for memberAreaId:', currentMemberAreaId);
     try {
-      const { data, error } = await supabase
+      // Primeiro buscar perfis
+      const { data: profilesData, error: profilesError } = await supabase
         .from('profiles')
-        .select(`
-          *,
-          member_access(module_id)
-        `) 
+        .select('*')
         .eq('member_area_id', currentMemberAreaId || '')
         .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      setMembers(data as Profile[] || []);
+
+      if (profilesError) throw profilesError;
+
+      const profiles = (profilesData as Profile[]) || [];
+
+      // Buscar registros em `members` para encontrar member_id correspondentes aos user_id
+      const userIds = profiles.map(p => p.user_id).filter(Boolean) as string[];
+      let memberAccessData: any[] = [];
+      if (userIds.length > 0) {
+        const { data: membersData, error: membersError } = await supabase
+          .from('members')
+          .select('id, user_id')
+          .in('user_id', userIds);
+
+        if (membersError) throw membersError;
+
+        const membersList = membersData || [];
+        const memberIds = membersList.map((m: any) => m.id).filter(Boolean) as string[];
+
+        if (memberIds.length > 0) {
+          // Primeiro tentar buscar por member_id (migrações recentes usam member_id)
+          const { data: maData, error: maError } = await supabase
+            .from('member_access')
+            .select('member_id, module_id')
+            .in('member_id', memberIds);
+
+          if (maError) {
+            // Se a coluna não existir, tentar buscar por user_id (schema alternativo)
+            console.warn('ADMIN_MEMBERS_DEBUG: member_access member_id query failed, attempting user_id fallback:', maError.message);
+            const { data: maData2, error: maError2 } = await supabase
+              .from('member_access')
+              .select('user_id, module_id')
+              .in('user_id', userIds);
+
+            if (maError2) throw maError2;
+            memberAccessData = maData2 || [];
+          } else {
+            memberAccessData = maData || [];
+          }
+        }
+
+        // Map member_id back to user_id (if memberAccessData has member_id) or handle user_id fallback
+        const memberIdByUserId: Record<string, string> = {};
+        membersList.forEach((m: any) => {
+          if (m.user_id && m.id) memberIdByUserId[m.user_id] = m.id;
+        });
+
+        const profilesWithAccess: Profile[] = profiles.map(p => {
+          let accesses: any[] = [];
+          if (memberAccessData.length > 0) {
+            if (memberAccessData[0].member_id !== undefined) {
+              const mid = memberIdByUserId[p.user_id as string];
+              accesses = memberAccessData.filter(ma => ma.member_id === mid).map(ma => ({ module_id: ma.module_id }));
+            } else if (memberAccessData[0].user_id !== undefined) {
+              accesses = memberAccessData.filter(ma => ma.user_id === p.user_id).map(ma => ({ module_id: ma.module_id }));
+            }
+          }
+          return {
+            ...p,
+            member_access: accesses,
+          };
+        });
+
+        setMembers(profilesWithAccess);
+      } else {
+        // sem users no array, apenas setar profiles vazios
+        setMembers(profiles);
+      }
       console.log('ADMIN_MEMBERS_DEBUG: fetchMembers completed successfully.');
     } catch (error: any) {
       toast({ title: "Erro", description: error.message || "Falha ao carregar membros.", variant: "destructive" });

@@ -2,7 +2,7 @@ import { createContext } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 
 // Definir a interface do tipo de contexto
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 export interface AuthContextType {
   user: User | null;
   session: Session | null;

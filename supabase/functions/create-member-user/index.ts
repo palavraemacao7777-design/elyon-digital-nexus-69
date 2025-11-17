@@ -88,6 +88,24 @@ serve(async (req) => {
     }
     console.log('EDGE_FUNCTION_DEBUG: User auth.users created with ID:', newUserId);
 
+    // Garantir que o perfil seja criado na tabela 'profiles'
+    try {
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .insert({
+          user_id: newUserId,
+          email,
+          name,
+          member_area_id: memberAreaId,
+          status: isActive ? 'active' : 'inactive',
+        });
+      if (profileError && !profileError.message.includes('duplicate key')) {
+        console.error('EDGE_FUNCTION_DEBUG: Erro ao criar perfil em profiles:', profileError);
+      }
+    } catch (profileCatchErr) {
+      console.error('EDGE_FUNCTION_DEBUG: Exceção ao criar perfil em profiles:', profileCatchErr);
+    }
+
     // 2. Conceder acesso aos módulos
     console.log('EDGE_FUNCTION_DEBUG: Attempting to grant module access. Selected Modules:', selectedModules);
     const accessInserts = selectedModules.map((moduleId: string) => ({

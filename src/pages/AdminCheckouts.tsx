@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -148,7 +148,7 @@ const AdminCheckouts = () => {
         color: '#dc2626',
         text: 'Oferta por tempo limitado'
       },
-      member_area_id: '' as string | null,
+      // member_area_id foi removido: associação agora é feita nas configurações da Área de Membros
       products: {
         id: '',
         name: '',
@@ -263,7 +263,7 @@ const AdminCheckouts = () => {
         banner_url: stylesFromCheckout?.banner_url || null,
       },
       timer: checkout.timer as Tables<'checkouts'>['timer'] || initial.timer,
-      member_area_id: checkout.member_area_id || null,
+      // member_area_id removido: associações de produto → área de membros são gerenciadas em Member Areas
       products: mainProductDetails ? {
         id: mainProductDetails.id,
         name: mainProductDetails.name,
@@ -289,7 +289,7 @@ const AdminCheckouts = () => {
         price_original: null, // Required
         project_id: null, // Required
         user_id: null, // Required
-        member_area_id: null, // Required by Tables<'products'>
+        // member_area_id: null, // removed: product -> member area association is handled in member areas
       },
     });
 
@@ -377,7 +377,8 @@ const AdminCheckouts = () => {
         if (integrationsConfig?.selectedMetaPixel) activeIntegrations.push('Meta Pixel');
         if (integrationsConfig?.selectedEmailAccount) activeIntegrations.push('Email SMTP');
         if (utmifyConfig?.apiKey) activeIntegrations.push('UTMify');
-        if (chk.member_area_id) activeIntegrations.push('Área de Membros');
+        // Associação de member area foi removida do checkout; a presença de Área de Membros
+        // será detectada a partir das configurações do produto/member_areas quando necessário.
 
         return {
           ...chk,
@@ -1046,7 +1047,6 @@ const AdminCheckouts = () => {
 
       const checkoutPayload: TablesInsert<'checkouts'> = {
         user_id: user?.id || null,
-        member_area_id: checkoutData.member_area_id || null,
         name: checkoutData.name,
         product_id: checkoutData.form_fields.packages[0]?.associatedProductIds?.[0] || null,
         price: Math.round(checkoutData.form_fields.packages[0]?.price * 100) || 0,
@@ -1255,29 +1255,8 @@ const AdminCheckouts = () => {
                   <TabsContent value="basic" className="space-y-4">
                     <div className="grid grid-cols-1 gap-4">
                       <div className="space-y-2">
-                        <Label htmlFor="memberArea">Área de Membros (Opcional)</Label>
-                        <Select 
-                          value={checkoutData.member_area_id || "none"} 
-                          onValueChange={value => handleInputChange('member_area_id', value === "none" ? null : value)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Associar a uma área de membros" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">Nenhuma</SelectItem>
-                            {memberAreas.map(area => (
-                              <SelectItem key={area.id} value={area.id}>
-                                <div className="flex items-center gap-2">
-                                  <MonitorDot className="h-4 w-4" />
-                                  {area.name}
-                                </div>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <p className="text-xs text-muted-foreground">
-                          Associe este checkout a uma área de membros específica.
-                        </p>
+                        <Label>Área de Membros</Label>
+                        <p className="text-sm text-muted-foreground">A associação de produto → Área de Membros agora é gerenciada em <strong>Configurações da Área de Membros</strong>. Removido do checkout.</p>
                       </div>
                       
                       <div className="space-y-2">
@@ -2385,12 +2364,7 @@ const AdminCheckouts = () => {
                         <p className="text-muted-foreground text-xs sm:text-sm mb-2 line-clamp-2">
                           {(safeJsonCast<CheckoutStyles>(checkout.styles) || {})?.description || checkout.products?.description || 'Nenhuma descrição'}
                         </p>
-                        {checkout.member_area_id && checkout.member_areas?.name && (
-                           <div className="flex items-center gap-1 text-xs text-muted-foreground mb-2">
-                             <MonitorDot className="h-3 w-3" />
-                             <span>Área: {checkout.member_areas.name}</span>
-                           </div>
-                         )}
+                        {/* Associação a Área de Membros agora gerenciada nas configurações da Área de Membros */}
                         <div className="flex items-center justify-between">
                           <span className="font-bold text-primary text-sm sm:text-base">
                             R$ {(checkout.price / 100).toFixed(2)}

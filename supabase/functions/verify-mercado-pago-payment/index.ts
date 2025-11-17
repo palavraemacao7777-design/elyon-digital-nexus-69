@@ -163,7 +163,21 @@ serve(async (req) => {
                 }
 
                 // Gerar uma senha aleatória para o usuário
-                const generatedPassword = Math.random().toString(36).slice(-8);
+                // Buscar senha padrão das configurações da área de membros, se existir
+                let generatedPassword = Math.random().toString(36).slice(-8);
+                if (firstMemberAreaId) {
+                  const { data: settingsConfig, error: settingsConfigErr } = await supabase
+                    .from('member_settings')
+                    .select('default_fixed_password')
+                    .eq('member_area_id', firstMemberAreaId)
+                    .maybeSingle();
+                  if (!settingsConfigErr && settingsConfig?.default_fixed_password) {
+                    generatedPassword = settingsConfig.default_fixed_password;
+                    console.log('VERIFY_MP_DEBUG: Senha fixa carregada de member_settings:', generatedPassword);
+                  } else if (settingsConfigErr) {
+                    console.error('VERIFY_MP_DEBUG: Erro ao buscar configurações de senha:', settingsConfigErr);
+                  }
+                }
 
                 try {
                   const { data: createRes, error: createErr } = await supabase.functions.invoke('create-member-user', {

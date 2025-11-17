@@ -4,11 +4,13 @@ import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 // Declare Deno namespace to resolve 'Cannot find name Deno' errors
+/* eslint-disable @typescript-eslint/no-namespace */
 declare namespace Deno {
   namespace env {
     function get(key: string): string | undefined;
   }
 }
+/* eslint-enable @typescript-eslint/no-namespace */
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',

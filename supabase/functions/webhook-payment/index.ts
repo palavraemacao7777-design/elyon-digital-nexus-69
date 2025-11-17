@@ -146,7 +146,7 @@ serve(async (req) => {
 
       let username = existingPurchase?.username;
       let password = existingPurchase?.password;
-      let accessSent = existingPurchase?.access_sent || false;
+      const accessSent = existingPurchase?.access_sent || false;
 
       if (!existingPurchase) {
         const credentials = generateCredentials(customerEmail);
