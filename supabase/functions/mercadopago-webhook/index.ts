@@ -34,7 +34,7 @@ const handler = async (req: Request): Promise<Response> => {
   }
 
   try {
-    console.log('🔔 Webhook recebido do Mercado Pago');
+    console.log('🔔 WEBHOOK_DEBUG: Webhook recebido do Mercado Pago');
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -43,7 +43,9 @@ const handler = async (req: Request): Promise<Response> => {
 
     // Pegar corpo do webhook
     const body = await req.text();
+    console.log('WEBHOOK_DEBUG: Raw body:', body);
     const webhook: MercadoPagoWebhook = JSON.parse(body);
+    console.log('WEBHOOK_DEBUG: Parsed webhook event:', { type: webhook.type, action: webhook.action, paymentId: webhook.data?.id });
 
     // Validar assinatura (IMPORTANTE PARA SEGURANÇA)
     const signature = req.headers.get('x-signature');
@@ -68,20 +70,25 @@ const handler = async (req: Request): Promise<Response> => {
 
     // Buscar detalhes do pagamento na API do Mercado Pago
     const paymentId = webhook.data.id;
+    console.log('WEBHOOK_DEBUG: Buscando detalhes do pagamento na API MP:', paymentId);
     const paymentDetails = await fetchPaymentDetails(paymentId);
 
-    console.log('💳 Detalhes do pagamento:', {
+    console.log('WEBHOOK_DEBUG: Payment details retrieved:', {
       id: paymentDetails.id,
       status: paymentDetails.status,
-      email: paymentDetails.payer?.email
+      email: paymentDetails.payer?.email,
+      external_reference: paymentDetails.external_reference,
+      transaction_amount: paymentDetails.transaction_amount,
+      payment_type_id: paymentDetails.payment_type_id
     });
 
     // Verificar se pagamento foi aprovado
     if (paymentDetails.status === 'approved') {
-      console.log('✅ Pagamento aprovado! Processando entrega...');
+      console.log('✅ WEBHOOK_DEBUG: Payment approved! Status:', paymentDetails.status);
+      console.log('WEBHOOK_DEBUG: Calling processApprovedPayment...');
       await processApprovedPayment(supabase, paymentDetails, webhook);
     } else {
-      console.log('⏳ Pagamento ainda não aprovado. Status:', paymentDetails.status);
+      console.log('⏳ WEBHOOK_DEBUG: Payment not yet approved. Status:', paymentDetails.status);
       
       // Registrar compra mesmo se não aprovada
       await registerPurchase(supabase, paymentDetails, webhook);
@@ -204,8 +211,16 @@ async function processApprovedPayment(
   const clienteTelefone = paymentDetails.payer.phone?.number;
   const clienteDocumento = paymentDetails.payer.identification?.number;
 
+  console.log('👤 WEBHOOK_DEBUG: Dados do cliente extraídos:', {
+    email: clienteEmail,
+    nome: clienteNome,
+    telefone: clienteTelefone,
+    documento: clienteDocumento
+  });
+
   // Identificar produto (via external_reference do pagamento)
   const produtoId = paymentDetails.external_reference; // UUID do produto passado no checkout
+  console.log('🛍️ WEBHOOK_DEBUG: Product ID extraído da external_reference:', produtoId);
 
   // Buscar produto no banco
   let produto = null;
@@ -312,80 +327,40 @@ async function processApprovedPayment(
 
   console.log('💾 Compra registrada:', compra.id);
 
-  // Tentar criar membro automaticamente na área de membros (pular se produto não encontrado)
+  // Criar membro automaticamente após pagamento aprovado (NOVO FLUXO CENTRALIZADO)
   try {
     if (skipMemberProvision) {
-      console.warn('CREATE_MEMBER_DEBUG: Pulando provisionamento de membro porque o produto/associação não foi encontrado. compra id:', compra.id);
+      console.warn('🚫 CREATE_MEMBER_FROM_PAYMENT: Pulando provisionamento - produto/associação não encontrada. compra_id:', compra.id);
     } else {
-    console.log('CREATE_MEMBER_DEBUG: Iniciando criação automática de membro para compra:', compra.id);
-
-    const memberAreaIds: string[] = [];
-    const productIds: string[] = [];
-
-    if (produto.member_area_id) {
-      memberAreaIds.push(produto.member_area_id);
-      productIds.push(produto.id);
-    }
-
-    // Buscar áreas de membros que tenham este produto em associated_products
-    try {
-      const { data: areas, error: areasErr } = await supabase
-        .from('member_areas')
-        .select('id')
-        .overlaps('associated_products', [produto.id]);
-
-      if (areasErr) console.error('CREATE_MEMBER_DEBUG: erro ao buscar member_areas por associated_products', areasErr);
-      if (areas && areas.length) {
-        areas.forEach((a: any) => { if (a?.id) memberAreaIds.push(a.id); });
-        if (!productIds.includes(produto.id)) {
-          productIds.push(produto.id);
+      console.log('🎯 CREATE_MEMBER_FROM_PAYMENT: Iniciando criação automática via create-member-from-payment');
+      
+      const { data: createRes, error: createErr } = await supabase.functions.invoke('create-member-from-payment', {
+        body: {
+          email: clienteEmail,
+          name: clienteNome,
+          product_id: produto.id,
+          payment_id: paymentId,
+          checkout_id: paymentDetails.external_reference
         }
-      }
-    } catch (e) {
-      console.error('CREATE_MEMBER_DEBUG: exceção ao buscar member_areas', e);
-    }
+      });
 
-    // Tornar única
-    const uniqueMemberAreaIds = Array.from(new Set(memberAreaIds));
-    const uniqueProductIds = Array.from(new Set(productIds));
-    let memberPassword: string | null = null;
-
-    // Preferir criar o membro uma vez com os dados mínimos configurados no checkout (nome + email)
-    if (uniqueProductIds.length > 0 && clienteEmail) {
-      try {
-        const { data: createRes, error: createErr } = await supabase.functions.invoke('create-member', {
-          body: {
-            name: clienteNome,
-            email: clienteEmail,
-            checkoutId: paymentDetails.external_reference,
-            paymentId: paymentId,
-            planType: produto.nome || 'standard',
-            productIds: uniqueProductIds
-          }
+      if (createErr) {
+        console.error('❌ CREATE_MEMBER_FROM_PAYMENT: Erro ao invocar função:', createErr);
+      } else if (createRes?.success) {
+        console.log('✅ CREATE_MEMBER_FROM_PAYMENT: Membro criado com sucesso!', {
+          memberId: createRes.memberId,
+          userId: createRes.userId,
+          email: createRes.email,
+          memberAreaId: createRes.memberAreaId,
+          message: createRes.message
         });
-
-        if (createErr) {
-          console.error('CREATE_MEMBER_DEBUG: create-member retornou erro:', createErr);
-        }
-
-        if (createRes?.success) {
-          console.log('CREATE_MEMBER_DEBUG: Membro criado/atualizado com sucesso:', { memberId: createRes.memberId, userId: createRes.userId });
-          if (createRes.password) memberPassword = createRes.password;
-        } else if (createRes && !createRes.success) {
-          console.error('CREATE_MEMBER_DEBUG: create-member não retornou sucesso:', createRes?.error);
-        }
-      } catch (maErr) {
-        console.error('CREATE_MEMBER_DEBUG: erro ao invocar create-member', maErr);
+        compra.memberPassword = createRes.password || null;
+      } else {
+        console.error('❌ CREATE_MEMBER_FROM_PAYMENT: Falha ao criar membro:', createRes?.error);
       }
-    } else {
-      console.log('CREATE_MEMBER_DEBUG: Nenhum produto comprado ou email do cliente ausente; pular criação de membro');
-    }
-
-      // Passar a senha do membro para o email
-      compra.memberPassword = memberPassword;
     }
   } catch (memberErr) {
-    console.error('CREATE_MEMBER_DEBUG: Erro no fluxo de criação automática de membro:', memberErr);
+    console.error('❌ CREATE_MEMBER_FROM_PAYMENT: Exceção no fluxo:', memberErr);
   }
 
   // Enviar email com entregável
