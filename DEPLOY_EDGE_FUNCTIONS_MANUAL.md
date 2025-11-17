@@ -1,3 +1,22 @@
+# 🚀 DEPLOY MANUAL: Funções Edge Corrigidas
+
+## 🔴 Problema Ativo
+A função `update-member-profile` ainda está usando `user_id` (coluna que não existe).
+Erro: `column member_access.user_id does not exist`
+
+## ✅ Solução: Deploy das Funções Corrigidas
+
+### Método 1: Via Supabase Dashboard (Recomendado - Mais Rápido)
+
+#### Passo 1: update-member-profile
+1. Acesse: https://app.supabase.com
+2. Projeto: `jgmwbovvydimvnmmkfpy`
+3. Menu → **Edge Functions** → `update-member-profile`
+4. Clique em **Deploy** (canto superior direito)
+5. Na aba **Code**, selecione tudo (Ctrl+A)
+6. **Apague tudo** e cole o conteúdo abaixo:
+
+```typescript
 // @ts-ignore
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 // @ts-ignore
@@ -212,3 +231,57 @@ serve(async (req) => {
     );
   }
 });
+```
+
+7. Clique **Deploy** (botão azul)
+8. Aguarde até ver "✅ Deployment successful"
+
+---
+
+#### Passo 2: create-member-user
+Repita os mesmos passos, mas para a função `create-member-user`:
+
+1. Edge Functions → `create-member-user`
+2. Copie o código de: `/workspaces/elyon-digital-nexus-69/supabase/functions/create-member-user/index.ts`
+3. Cola no editor
+4. Deploy
+
+---
+
+### Método 2: Via CLI (Se Tiver Token)
+```bash
+export SUPABASE_ACCESS_TOKEN="seu_token_do_supabase"
+cd /workspaces/elyon-digital-nexus-69
+npx supabase functions deploy update-member-profile --project-ref jgmwbovvydimvnmmkfpy
+npx supabase functions deploy create-member-user --project-ref jgmwbovvydimvnmmkfpy
+```
+
+---
+
+## ✅ Verificar Deploy
+
+Após fazer o deploy, vá para **Edge Functions** → Selecione a função → Abra a aba **Logs**
+
+Procure por:
+- ✅ `EDGE_FUNCTION_DEBUG: Member update process completed successfully.` (sucesso)
+- ❌ `column member_access.user_id does not exist` (ainda com problema antigo)
+
+---
+
+## 🎯 Teste Final
+
+1. Vá para Admin → Membros
+2. Selecione um membro ou crie um novo
+3. Altere a seleção de produtos
+4. Clique "Salvar Membro"
+5. Nos logs do browser, procure por:
+   - `MEMBER_FORM_DEBUG: Updating member: ...` (enviando)
+   - `EDGE_FUNCTION_DEBUG: Member update process completed successfully.` (processado)
+
+---
+
+## ⏱️ Tempo Estimado
+- **Método 1 (Dashboard)**: 5-10 minutos
+- **Método 2 (CLI)**: 2-3 minutos
+
+Se tiver dúvidas, verifique os logs de Edge Functions no dashboard!

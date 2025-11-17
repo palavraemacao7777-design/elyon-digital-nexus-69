@@ -79,7 +79,8 @@ const handler = async (req: Request): Promise<Response> => {
       email: paymentDetails.payer?.email,
       external_reference: paymentDetails.external_reference,
       transaction_amount: paymentDetails.transaction_amount,
-      payment_type_id: paymentDetails.payment_type_id
+      payment_type_id: paymentDetails.payment_type_id,
+      metadata: paymentDetails.metadata
     });
 
     // Verificar se pagamento foi aprovado
@@ -327,37 +328,84 @@ async function processApprovedPayment(
 
   console.log('💾 Compra registrada:', compra.id);
 
-  // Criar membro automaticamente após pagamento aprovado (NOVO FLUXO CENTRALIZADO)
+  // Criar membro automaticamente para CADA produto comprado (NOVO FLUXO CENTRALIZADO)
   try {
-    if (skipMemberProvision) {
-      console.warn('🚫 CREATE_MEMBER_FROM_PAYMENT: Pulando provisionamento - produto/associação não encontrada. compra_id:', compra.id);
-    } else {
-      console.log('🎯 CREATE_MEMBER_FROM_PAYMENT: Iniciando criação automática via create-member-from-payment');
-      
-      const { data: createRes, error: createErr } = await supabase.functions.invoke('create-member-from-payment', {
-        body: {
-          email: clienteEmail,
-          name: clienteNome,
-          product_id: produto.id,
-          payment_id: paymentId,
-          checkout_id: paymentDetails.external_reference
-        }
-      });
+    // Extrair purchasedProductIds do metadata do pagamento
+    let purchasedProductIds: string[] = [];
+    if (paymentDetails.metadata?.purchased_product_ids) {
+      purchasedProductIds = Array.isArray(paymentDetails.metadata.purchased_product_ids) 
+        ? paymentDetails.metadata.purchased_product_ids 
+        : [paymentDetails.metadata.purchased_product_ids];
+    } else if (produto?.id) {
+      // Fallback: usar product_id do first produto encontrado
+      purchasedProductIds = [produto.id];
+    }
 
-      if (createErr) {
-        console.error('❌ CREATE_MEMBER_FROM_PAYMENT: Erro ao invocar função:', createErr);
-      } else if (createRes?.success) {
-        console.log('✅ CREATE_MEMBER_FROM_PAYMENT: Membro criado com sucesso!', {
-          memberId: createRes.memberId,
-          userId: createRes.userId,
-          email: createRes.email,
-          memberAreaId: createRes.memberAreaId,
-          message: createRes.message
-        });
-        compra.memberPassword = createRes.password || null;
-      } else {
-        console.error('❌ CREATE_MEMBER_FROM_PAYMENT: Falha ao criar membro:', createRes?.error);
+    console.log('📦 CREATE_MEMBER_FROM_PAYMENT: purchasedProductIds a processar:', purchasedProductIds);
+
+    // Processar CADA produto comprado
+    for (const productId of purchasedProductIds) {
+      if (!productId) {
+        console.warn('⚠️ CREATE_MEMBER_FROM_PAYMENT: productId vazio, pulando...');
+        continue;
       }
+
+      console.log('🎯 CREATE_MEMBER_FROM_PAYMENT: Criando membro para product:', productId);
+      
+      let retries = 2;
+      let success = false;
+      let lastError = null;
+
+      while (retries > 0 && !success) {
+        const { data: createRes, error: createErr } = await supabase.functions.invoke('create-member-from-payment', {
+          body: {
+            email: clienteEmail,
+            name: clienteNome,
+            product_id: productId,
+            payment_id: paymentId,
+            checkout_id: paymentDetails.metadata?.checkout_id || paymentDetails.external_reference
+          }
+        });
+
+        if (createErr) {
+          lastError = createErr;
+          console.warn(`⚠️ CREATE_MEMBER_FROM_PAYMENT: Erro ao invocar função para product ${productId} (tentativa ${3-retries}/2):`, createErr);
+          retries--;
+          if (retries > 0) {
+            console.log('⏳ CREATE_MEMBER_FROM_PAYMENT: Aguardando 2s antes de retry...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        } else if (createRes?.success) {
+          console.log('✅ CREATE_MEMBER_FROM_PAYMENT: Membro criado com sucesso para product:', productId, {
+            memberId: createRes.memberId,
+            userId: createRes.userId,
+            email: createRes.email,
+            memberAreaId: createRes.memberAreaId,
+            message: createRes.message
+          });
+          // Guardar password do primeiro membro criado para email
+          if (!compra.memberPassword) {
+            compra.memberPassword = createRes.password || null;
+          }
+          success = true;
+        } else {
+          lastError = createRes?.error;
+          console.warn(`⚠️ CREATE_MEMBER_FROM_PAYMENT: Falha ao criar membro para product ${productId} (tentativa ${3-retries}/2):`, createRes?.error);
+          retries--;
+          if (retries > 0) {
+            console.log('⏳ CREATE_MEMBER_FROM_PAYMENT: Aguardando 2s antes de retry...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        }
+      }
+
+      if (!success) {
+        console.error('❌ CREATE_MEMBER_FROM_PAYMENT: Falha permanente ao criar membro para product', productId, ':', lastError);
+      }
+    }
+
+    if (purchasedProductIds.length === 0) {
+      console.warn('🚫 CREATE_MEMBER_FROM_PAYMENT: Nenhum productId encontrado no webhook');
     }
   } catch (memberErr) {
     console.error('❌ CREATE_MEMBER_FROM_PAYMENT: Exceção no fluxo:', memberErr);

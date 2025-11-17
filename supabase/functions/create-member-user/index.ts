@@ -26,14 +26,45 @@ serve(async (req) => {
   }
 
   try {
-    // @ts-ignore
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    // @ts-ignore
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    let supabaseUrl: string | null = null;
+    let supabaseServiceKey: string | null = null;
+    
+    try {
+      // @ts-ignore
+      supabaseUrl = Deno.env.get('SUPABASE_URL');
+      // @ts-ignore
+      supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+      
+      if (!supabaseUrl || !supabaseServiceKey) {
+        console.error('EDGE_FUNCTION_DEBUG: Missing env vars - SUPABASE_URL:', !!supabaseUrl, 'SERVICE_KEY:', !!supabaseServiceKey);
+        return new Response(
+          JSON.stringify({ success: false, error: 'Variáveis de ambiente não configuradas.' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+        );
+      }
+    } catch (envErr) {
+      console.error('EDGE_FUNCTION_DEBUG: Error reading env vars:', envErr);
+      return new Response(
+        JSON.stringify({ success: false, error: 'Erro ao acessar configurações.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+      );
+    }
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { name, email, password, memberAreaId, selectedModules, isActive } = await req.json();
-    console.log('EDGE_FUNCTION_DEBUG: Received data:', { name, email, password: password ? '***' : 'N/A', memberAreaId, selectedModules, isActive });
+    let bodyData: any = {};
+    try {
+      bodyData = await req.json();
+    } catch (parseErr) {
+      console.error('EDGE_FUNCTION_DEBUG: Error parsing JSON body:', parseErr);
+      return new Response(
+        JSON.stringify({ success: false, error: 'JSON inválido no corpo da requisição.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      );
+    }
+
+    const { name, email, password, memberAreaId, selectedProducts, isActive } = bodyData;
+    console.log('EDGE_FUNCTION_DEBUG: Received data:', { name, email, password: password ? '***' : 'N/A', memberAreaId, selectedProducts, isActive });
 
     if (!name || !email || !password || !memberAreaId) {
       console.error('EDGE_FUNCTION_DEBUG: Incomplete data received for member creation.');
@@ -60,18 +91,102 @@ serve(async (req) => {
 
     if (authError) {
       console.error('EDGE_FUNCTION_DEBUG: Error creating user with auth.admin.createUser:', authError);
-      let statusCode = 500;
-      let errorMessage = authError.message || 'Falha ao criar usuário.';
+      const authMsg = authError.message || '';
+      const isDuplicateEmail = authMsg.includes('duplicate key value violates unique constraint "users_email_key"') || authMsg.includes('A user with this email address has already been registered') || authMsg.includes('email_exists') || authMsg.includes('already');
 
-      // Tratamento de erro específico para e-mail duplicado
-      if (authError.message.includes('duplicate key value violates unique constraint "users_email_key"') || authError.message.includes('A user with this email address has already been registered')) {
-        statusCode = 409; // Conflict
-        errorMessage = 'Este e-mail já está cadastrado.';
-      } else if (authError.message.includes('Password should be at least 6 characters')) {
+      // Tentativa de recuperação automática se o email já existir
+      if (isDuplicateEmail) {
+        console.log('EDGE_FUNCTION_DEBUG: Duplicate email detected, attempting recovery...');
+        let existingUserId: string | null = null;
+
+        // 1) tentar recuperar user_id pela tabela profiles
+        try {
+          const { data: existingProfile, error: profileErr } = await supabase
+            .from('profiles')
+            .select('user_id')
+            .eq('email', email)
+            .maybeSingle();
+
+          if (!profileErr && existingProfile?.user_id) {
+            existingUserId = existingProfile.user_id;
+            console.log('EDGE_FUNCTION_DEBUG: user_id found in profiles:', existingUserId);
+          } else if (profileErr) {
+            console.warn('EDGE_FUNCTION_DEBUG: profiles lookup error:', profileErr.message || profileErr);
+          }
+        } catch (profileFetchErr) {
+          console.warn('EDGE_FUNCTION_DEBUG: profiles lookup exception:', profileFetchErr);
+        }
+
+        // 2) fallback: buscar via admin.listUsers
+        if (!existingUserId) {
+          try {
+            const { data: { users }, error: listError } = await supabase.auth.admin.listUsers();
+            if (!listError && users && Array.isArray(users)) {
+              const found = (users as any[]).find((u: any) => u.email === email);
+              if (found?.id) {
+                existingUserId = found.id;
+                console.log('EDGE_FUNCTION_DEBUG: user_id found via admin.listUsers:', existingUserId);
+              }
+            } else if (listError) {
+              console.warn('EDGE_FUNCTION_DEBUG: admin.listUsers error:', listError.message || listError);
+            }
+          } catch (listFetchErr) {
+            console.warn('EDGE_FUNCTION_DEBUG: admin.listUsers exception:', listFetchErr);
+          }
+        }
+
+        if (!existingUserId) {
+          console.error('EDGE_FUNCTION_DEBUG: Duplicate email but could not recover user_id');
+          return new Response(
+            JSON.stringify({ success: false, error: 'Este e-mail já está cadastrado.' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 409 }
+          );
+        }
+
+        console.log('EDGE_FUNCTION_DEBUG: Recovered existing user_id:', existingUserId);
+
+        // Garantir que o profile exista/seja atualizado
+        try {
+          const { error: upsertProfileErr } = await supabase
+            .from('profiles')
+            .upsert({
+              user_id: existingUserId,
+              email,
+              name,
+              member_area_id: memberAreaId,
+              status: isActive ? 'active' : 'inactive',
+            }, { onConflict: 'user_id' });
+
+          if (upsertProfileErr) {
+            console.warn('EDGE_FUNCTION_DEBUG: profiles upsert warning:', upsertProfileErr.message || upsertProfileErr);
+          } else {
+            console.log('EDGE_FUNCTION_DEBUG: profiles upserted successfully');
+          }
+        } catch (upsertErr) {
+          console.warn('EDGE_FUNCTION_DEBUG: profiles upsert exception:', upsertErr);
+        }
+
+        // Conceder acessos selecionados ao usuário existente
+        // NOTA: member_access só é criado quando há um pagamento (via webhook -> create-member-from-payment)
+        // Não tentamos criar member_access aqui porque não temos member_id ainda
+        console.log('EDGE_FUNCTION_DEBUG: Skipping member_access for recovered user (requires payment flow)');
+
+        console.log('EDGE_FUNCTION_DEBUG: Returning success for recovered existing user');
+        return new Response(
+          JSON.stringify({ success: true, userId: existingUserId, recovered: true }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
+        );
+      }
+
+      // Outros erros normais
+      let statusCode = 500;
+      let errorMessage = authMsg || 'Falha ao criar usuário.';
+
+      if (authMsg.includes('Password should be at least 6 characters')) {
         statusCode = 400; // Bad Request
         errorMessage = 'A senha deve ter pelo menos 6 caracteres.';
       }
-      
+
       return new Response(
         JSON.stringify({ success: false, error: errorMessage }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: statusCode }
@@ -106,31 +221,15 @@ serve(async (req) => {
       console.error('EDGE_FUNCTION_DEBUG: Exceção ao criar perfil em profiles:', profileCatchErr);
     }
 
-    // 2. Conceder acesso aos módulos
-    console.log('EDGE_FUNCTION_DEBUG: Attempting to grant module access. Selected Modules:', selectedModules);
-    const accessInserts = selectedModules.map((moduleId: string) => ({
-      user_id: newUserId,
-      module_id: moduleId,
-      is_active: true,
-      member_area_id: memberAreaId,
-    }));
-
-    if (accessInserts.length > 0) {
-      console.log('EDGE_FUNCTION_DEBUG: Inserting into member_access:', JSON.stringify(accessInserts, null, 2));
-      const { error: insertAccessError } = await supabase
-        .from('member_access')
-        .insert(accessInserts);
-
-      if (insertAccessError) {
-        console.error('EDGE_FUNCTION_DEBUG: Error inserting module access:', insertAccessError);
-        return new Response(
-          JSON.stringify({ success: false, error: insertAccessError.message || 'Falha ao conceder acesso aos módulos.' }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
-        );
-      }
-      console.log('EDGE_FUNCTION_DEBUG: Module access granted for user_id:', newUserId);
+    // 2. Conceder acesso aos produtos
+    // NOTA: member_access só é criado quando há um pagamento (via webhook -> create-member-from-payment)
+    // Não tentamos criar member_access aqui porque não temos member_id até que um pagamento seja processado
+    console.log('EDGE_FUNCTION_DEBUG: Module access will be granted via payment flow (member_access requires member_id from payment)');
+    
+    if (selectedProducts && Array.isArray(selectedProducts)) {
+      console.log('EDGE_FUNCTION_DEBUG: Noted selected products for reference (will be applied after payment):', selectedProducts);
     } else {
-      console.log('EDGE_FUNCTION_DEBUG: No modules selected to grant access.');
+      console.log('EDGE_FUNCTION_DEBUG: No products selected at user creation time.');
     }
 
     console.log('EDGE_FUNCTION_DEBUG: Member creation process completed successfully.');

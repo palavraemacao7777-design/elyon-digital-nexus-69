@@ -114,21 +114,44 @@ serve(async (req: Request) => {
       });
 
       if (authError) {
-        if (authError.message?.includes('duplicate') || authError.message?.includes('already')) {
+        if (authError.message?.includes('duplicate') || authError.message?.includes('already') || authError.code === 'email_exists') {
           console.log('⚠️ CREATE_MEMBER_FROM_PAYMENT: Email já cadastrado em auth, tentando recuperar user_id...');
-          // Tentar buscar o perfil/usuário existente
+          
+          // Opção 1: Buscar em profiles
           const { data: profile } = await supabase
             .from('profiles')
             .select('user_id')
             .eq('email', email)
             .maybeSingle();
+          
           if (profile?.user_id) {
             userId = profile.user_id;
-            console.log('✅ CREATE_MEMBER_FROM_PAYMENT: user_id recuperado:', userId);
+            console.log('✅ CREATE_MEMBER_FROM_PAYMENT: user_id recuperado de profiles:', userId);
           } else {
-            throw new Error('Email já cadastrado mas não foi possível recuperar user_id');
+            // Opção 2: Buscar via auth.admin.listUsers
+            try {
+              console.log('⏳ CREATE_MEMBER_FROM_PAYMENT: Buscando user via admin API...');
+              const { data: { users }, error: listError } = await supabase.auth.admin.listUsers();
+              
+              if (!listError && users) {
+                const existingUser = users.find((u: any) => u.email === email);
+                if (existingUser?.id) {
+                  userId = existingUser.id;
+                  console.log('✅ CREATE_MEMBER_FROM_PAYMENT: user_id recuperado via admin API:', userId);
+                } else {
+                  console.error('❌ CREATE_MEMBER_FROM_PAYMENT: Email existe em auth mas não foi encontrado via admin API');
+                  throw new Error(`Email ${email} existe em auth.users mas não conseguimos recuperar o user_id`);
+                }
+              } else {
+                throw new Error(`Erro ao listar usuarios: ${listError?.message || 'desconhecido'}`);
+              }
+            } catch (adminError) {
+              console.error('❌ CREATE_MEMBER_FROM_PAYMENT: Erro ao buscar user via admin API:', adminError);
+              throw adminError;
+            }
           }
         } else {
+          console.error('❌ CREATE_MEMBER_FROM_PAYMENT: Erro ao criar auth user:', authError);
           throw authError;
         }
       } else {
@@ -200,7 +223,7 @@ serve(async (req: Request) => {
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
     );
-  } catch (error) {
+  } catch (error: any) {
     console.error('❌ CREATE_MEMBER_FROM_PAYMENT: Erro:', error?.message || error);
     return new Response(
       JSON.stringify({

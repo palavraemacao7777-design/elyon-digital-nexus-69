@@ -165,13 +165,14 @@ serve(async (req) => {
         } : undefined
       },
       notification_url: `${supabaseUrl}/functions/v1/mercado-pago-webhook`,
-      external_reference: checkoutId,
+      external_reference: purchasedProductIds && purchasedProductIds.length > 0 ? purchasedProductIds[0] : checkoutId, // Use first product ID
       metadata: {
         customer_data: customerData,
         order_bumps: orderBumps,
         selected_package: selectedPackage,
         payment_method: paymentMethod,
         purchased_product_ids: purchasedProductIds, // NEW: Pass all purchased product IDs
+        checkout_id: checkoutId, // Store checkout ID in metadata too
         // Adicionar todos os dados de e-mail transacional e entregável aqui
         email_transactional_data: emailMetadata,
       }

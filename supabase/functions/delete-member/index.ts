@@ -20,11 +20,42 @@ serve(async (req) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    let supabaseUrl: string | null = null;
+    let supabaseServiceKey: string | null = null;
+    
+    try {
+      supabaseUrl = Deno.env.get('SUPABASE_URL');
+      supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+      
+      if (!supabaseUrl || !supabaseServiceKey) {
+        console.error('EDGE_FUNCTION_DEBUG: Missing env vars');
+        return new Response(
+          JSON.stringify({ success: false, error: 'Variáveis de ambiente não configuradas.' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+        );
+      }
+    } catch (envErr) {
+      console.error('EDGE_FUNCTION_DEBUG: Error reading env vars:', envErr);
+      return new Response(
+        JSON.stringify({ success: false, error: 'Erro ao acessar configurações.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+      );
+    }
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { userId } = await req.json();
+    let bodyData: any = {};
+    try {
+      bodyData = await req.json();
+    } catch (parseErr) {
+      console.error('EDGE_FUNCTION_DEBUG: Error parsing JSON body:', parseErr);
+      return new Response(
+        JSON.stringify({ success: false, error: 'JSON inválido no corpo da requisição.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      );
+    }
+
+    const { userId } = bodyData;
 
     if (!userId) {
       return new Response(

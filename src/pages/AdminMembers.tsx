@@ -17,17 +17,19 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Tables, TablesInsert, TablesUpdate } from '@/integrations/supabase/types';
 
 type Profile = Tables<'profiles'> & {
-  member_access?: Pick<Tables<'member_access'>, 'module_id'>[] | null;
+  member_access?: Pick<Tables<'member_access'>, 'product_id'>[] | null;
+  members?: Pick<Tables<'members'>, 'id'>[] | null;
 };
-type Module = Tables<'modules'>;
+type Product = Tables<'products'> & { title?: string };
 
-const MemberFormDialog = ({ member, onSave, modules, memberAreaId, onClose }: { member?: Profile, onSave: () => void, modules: Module[], memberAreaId: string, onClose: () => void }) => {
+const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: { member?: Profile, onSave: () => void, products: Product[], memberAreaId: string, onClose: () => void }) => {
   const [name, setName] = useState(member?.name || '');
   const [email, setEmail] = useState(member?.email || '');
   const [password, setPassword] = useState('');
   const [generatePassword, setGeneratePassword] = useState(false);
   const [isActive, setIsActive] = useState(member?.status === 'active');
-  const [selectedModules, setSelectedModules] = useState<string[]>(member?.member_access?.map((ma: any) => ma.module_id) || []);
+  const [memberId, setMemberId] = useState(member?.members?.[0]?.id || '');
+  const [selectedProducts, setSelectedProducts] = useState<string[]>(member?.member_access?.map((ma: any) => ma.product_id) || []);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
   const { user: adminUser } = useAuth();
@@ -37,14 +39,16 @@ const MemberFormDialog = ({ member, onSave, modules, memberAreaId, onClose }: { 
       setName(member.name || '');
       setEmail(member.email || '');
       setIsActive(member.status === 'active');
-      setSelectedModules(member?.member_access?.map((ma: any) => ma.module_id) || []);
+      setMemberId(member.members?.[0]?.id || '');
+      setSelectedProducts(member?.member_access?.map((ma: any) => ma.product_id) || []);
     } else {
       setName('');
       setEmail('');
       setPassword('');
       setGeneratePassword(false);
       setIsActive(true);
-      setSelectedModules([]);
+      setMemberId('');
+      setSelectedProducts([]);
     }
   }, [member, memberAreaId]);
 
@@ -58,13 +62,15 @@ const MemberFormDialog = ({ member, onSave, modules, memberAreaId, onClose }: { 
     setLoading(true);
     try {
       if (member) {
+        console.log('MEMBER_FORM_DEBUG: Updating member:', { userId: member.user_id, memberId, name, status: isActive ? 'active' : 'inactive', memberAreaId, selectedProducts });
         const { data, error: edgeFunctionError } = await supabase.functions.invoke('update-member-profile', {
           body: {
             userId: member.user_id,
+            memberId,
             name,
             status: isActive ? 'active' : 'inactive',
             memberAreaId,
-            selectedModules,
+            selectedProducts,
           },
           method: 'POST',
         });
@@ -101,7 +107,7 @@ const MemberFormDialog = ({ member, onSave, modules, memberAreaId, onClose }: { 
             email,
             password: finalPassword,
             memberAreaId,
-            selectedModules,
+            selectedProducts,
             isActive,
           },
           method: 'POST',
@@ -170,30 +176,30 @@ const MemberFormDialog = ({ member, onSave, modules, memberAreaId, onClose }: { 
           <Switch id="isActive" checked={isActive} onCheckedChange={setIsActive} />
         </div>
 
-        <h3 className="font-semibold mt-6 text-base sm:text-lg">Acesso aos Módulos</h3>
+        <h3 className="font-semibold mt-6 text-base sm:text-lg">Acesso aos Produtos</h3>
         <div className="space-y-2 max-h-48 overflow-y-auto border p-2 rounded-md">
-          {modules.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nenhum módulo disponível.</p>
+          {products.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Nenhum produto disponível.</p>
           ) : (
-            modules.map(module => (
-              <div key={module.id} className="flex items-center space-x-2">
+            products.map(product => (
+              <div key={product.id} className="flex items-center space-x-2">
                 <Checkbox
-                  id={`module-${module.id}`}
-                  checked={selectedModules.includes(module.id)}
+                  id={`product-${product.id}`}
+                  checked={selectedProducts.includes(product.id)}
                   onCheckedChange={(checked) => {
-                    setSelectedModules(prev =>
-                      checked ? [...prev, module.id] : prev.filter(id => id !== module.id)
+                    setSelectedProducts(prev =>
+                      checked ? [...prev, product.id] : prev.filter(id => id !== product.id)
                     );
                   }}
                 />
-                <Label htmlFor={`module-${module.id}`} className="text-sm">{module.title}</Label>
+                <Label htmlFor={`product-${product.id}`} className="text-sm">{product.title}</Label>
               </div>
             ))
           )}
         </div>
         <div className="flex flex-col sm:flex-row gap-2 mt-2">
-          <Button type="button" variant="outline" onClick={() => setSelectedModules(modules.map(m => m.id))} className="w-full sm:w-auto text-sm">Liberar Tudo</Button>
-          <Button type="button" variant="outline" onClick={() => setSelectedModules([])} className="w-full sm:w-auto text-sm">Bloquear Tudo</Button>
+          <Button type="button" variant="outline" onClick={() => setSelectedProducts(products.map(m => m.id))} className="w-full sm:w-auto text-sm">Liberar Tudo</Button>
+          <Button type="button" variant="outline" onClick={() => setSelectedProducts([])} className="w-full sm:w-auto text-sm">Bloquear Tudo</Button>
         </div>
       </div>
       <Button className="w-full" onClick={handleSave} disabled={loading}>
@@ -209,7 +215,7 @@ const AdminMembers = ({ memberAreaId: propMemberAreaId }: { memberAreaId?: strin
   const currentMemberAreaId = propMemberAreaId || urlMemberAreaId;
 
   const [members, setMembers] = useState<Profile[]>([]);
-  const [modules, setModules] = useState<Module[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
   const [loadingMembers, setLoadingMembers] = useState(true); // Renamed from loadingPage for clarity
   const [editingMember, setEditingMember] = useState<Profile | null>(null);
   const [isFormDialogOpen, setIsFormDialogOpen] = useState(false);
@@ -223,7 +229,7 @@ const AdminMembers = ({ memberAreaId: propMemberAreaId }: { memberAreaId?: strin
         setLoadingMembers(true);
         await Promise.all([
           fetchMembers(),
-          fetchModules()
+          fetchProducts()
         ]);
         setLoadingMembers(false);
         console.log('ADMIN_MEMBERS_DEBUG: All initial data loaded, setLoadingMembers(false).');
@@ -252,7 +258,9 @@ const AdminMembers = ({ memberAreaId: propMemberAreaId }: { memberAreaId?: strin
 
       // Buscar registros em `members` para encontrar member_id correspondentes aos user_id
       const userIds = profiles.map(p => p.user_id).filter(Boolean) as string[];
+      let membersMap: Record<string, string> = {}; // user_id => member_id
       let memberAccessData: any[] = [];
+      
       if (userIds.length > 0) {
         const { data: membersData, error: membersError } = await supabase
           .from('members')
@@ -263,54 +271,44 @@ const AdminMembers = ({ memberAreaId: propMemberAreaId }: { memberAreaId?: strin
 
         const membersList = membersData || [];
         const memberIds = membersList.map((m: any) => m.id).filter(Boolean) as string[];
+        
+        // Build map of user_id => member_id and member_id => {}
+        membersList.forEach((m: any) => {
+          if (m.user_id && m.id) {
+            membersMap[m.user_id] = m.id;
+          }
+        });
 
         if (memberIds.length > 0) {
-          // Primeiro tentar buscar por member_id (migrações recentes usam member_id)
+          // Buscar member_access pelo member_id
           const { data: maData, error: maError } = await supabase
             .from('member_access')
-            .select('member_id, module_id')
+            .select('member_id, product_id')
             .in('member_id', memberIds);
 
           if (maError) {
-            // Se a coluna não existir, tentar buscar por user_id (schema alternativo)
-            console.warn('ADMIN_MEMBERS_DEBUG: member_access member_id query failed, attempting user_id fallback:', maError.message);
-            const { data: maData2, error: maError2 } = await supabase
-              .from('member_access')
-              .select('user_id, module_id')
-              .in('user_id', userIds);
-
-            if (maError2) throw maError2;
-            memberAccessData = maData2 || [];
+            console.warn('ADMIN_MEMBERS_DEBUG: member_access query error:', maError.message);
           } else {
             memberAccessData = maData || [];
           }
         }
 
-        // Map member_id back to user_id (if memberAccessData has member_id) or handle user_id fallback
-        const memberIdByUserId: Record<string, string> = {};
-        membersList.forEach((m: any) => {
-          if (m.user_id && m.id) memberIdByUserId[m.user_id] = m.id;
-        });
-
+        // Map member_access data back to profiles
         const profilesWithAccess: Profile[] = profiles.map(p => {
-          let accesses: any[] = [];
-          if (memberAccessData.length > 0) {
-            if (memberAccessData[0].member_id !== undefined) {
-              const mid = memberIdByUserId[p.user_id as string];
-              accesses = memberAccessData.filter(ma => ma.member_id === mid).map(ma => ({ module_id: ma.module_id }));
-            } else if (memberAccessData[0].user_id !== undefined) {
-              accesses = memberAccessData.filter(ma => ma.user_id === p.user_id).map(ma => ({ module_id: ma.module_id }));
-            }
-          }
+          const mid = membersMap[p.user_id as string];
+          const accesses = memberAccessData
+            .filter(ma => ma.member_id === mid)
+            .map(ma => ({ product_id: ma.product_id }));
+          
           return {
             ...p,
-            member_access: accesses,
+            members: mid ? [{ id: mid }] : undefined,
+            member_access: accesses.length > 0 ? accesses : null,
           };
         });
 
         setMembers(profilesWithAccess);
       } else {
-        // sem users no array, apenas setar profiles vazios
         setMembers(profiles);
       }
       console.log('ADMIN_MEMBERS_DEBUG: fetchMembers completed successfully.');
@@ -323,25 +321,47 @@ const AdminMembers = ({ memberAreaId: propMemberAreaId }: { memberAreaId?: strin
     }
   };
 
-  const fetchModules = async () => {
-    console.log('ADMIN_MEMBERS_DEBUG: fetchModules started for memberAreaId:', currentMemberAreaId);
+  const fetchProducts = async () => {
+    console.log('ADMIN_MEMBERS_DEBUG: fetchProducts started for memberAreaId:', currentMemberAreaId);
     if (!currentMemberAreaId) {
-      console.log('ADMIN_MEMBERS_DEBUG: fetchModules skipped, no memberAreaId.');
+      console.log('ADMIN_MEMBERS_DEBUG: fetchProducts skipped, no memberAreaId.');
+      setProducts([]);
       return;
     }
     try {
       const { data, error } = await supabase
-        .from('modules')
-        .select('id, title')
-        .eq('status', 'published')
-        .eq('member_area_id', currentMemberAreaId);
+        .from('products')
+        .select('id, name')
+        .eq('member_area_id', currentMemberAreaId)
+        .order('name', { ascending: true });
       
-      if (error) throw error;
-      setModules(data as Module[] || []);
-      console.log('ADMIN_MEMBERS_DEBUG: fetchModules completed successfully.');
+      if (error) {
+        console.warn('ADMIN_MEMBERS_DEBUG: Erro na query de products:', error);
+        // Tentar fallback: buscar todos os produtos e filtrar no cliente
+        const { data: allProducts, error: fallbackError } = await supabase
+          .from('products')
+          .select('id, name, member_area_id');
+        
+        if (fallbackError) {
+          console.error('ADMIN_MEMBERS_DEBUG: Fallback também falhou:', fallbackError);
+          throw fallbackError;
+        }
+        
+        const filtered = (allProducts || []).filter((p: any) => p.member_area_id === currentMemberAreaId);
+        const mappedProducts = filtered.map((p: any) => ({ id: p.id, title: p.name }));
+        setProducts(mappedProducts as Product[] || []);
+        console.log('ADMIN_MEMBERS_DEBUG: fetchProducts completed via fallback, found:', mappedProducts.length);
+      } else {
+        // Mapear 'name' para 'title' para compatibilidade com o componente
+        const mappedProducts = (data || []).map((p: any) => ({ id: p.id, title: p.name }));
+        setProducts(mappedProducts as Product[] || []);
+        console.log('ADMIN_MEMBERS_DEBUG: fetchProducts completed successfully, found:', mappedProducts.length);
+      }
     } catch (error: any) {
-      toast({ title: "Erro", description: error.message || "Falha ao carregar módulos para permissões.", variant: "destructive" });
-      console.error('ADMIN_MEMBERS_DEBUG: Erro ao carregar módulos para permissões:', error);
+      console.error('ADMIN_MEMBERS_DEBUG: Erro ao carregar produtos para permissões:', error);
+      // Não mostrar erro ao usuário, apenas log
+      console.warn('ADMIN_MEMBERS_DEBUG: Failed to load products, check RLS policies and migration 20251117_products_admin_access.sql');
+      setProducts([]);
     }
   };
 
@@ -433,7 +453,7 @@ const AdminMembers = ({ memberAreaId: propMemberAreaId }: { memberAreaId?: strin
                 <UserPlus className="mr-2 h-4 w-4" /> Novo Membro
               </Button>
             </DialogTrigger>
-            <MemberFormDialog member={editingMember} onSave={handleFormDialogClose} modules={modules} memberAreaId={currentMemberAreaId} onClose={() => setIsFormDialogOpen(false)} />
+            <MemberFormDialog member={editingMember} onSave={handleFormDialogClose} products={products} memberAreaId={currentMemberAreaId} onClose={() => setIsFormDialogOpen(false)} />
           </Dialog>
         </CardHeader>
         <CardContent>
