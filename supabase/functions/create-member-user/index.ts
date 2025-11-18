@@ -34,18 +34,17 @@ serve(async (req) => {
       supabaseUrl = Deno.env.get('SUPABASE_URL');
       // @ts-ignore
       supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-      
       if (!supabaseUrl || !supabaseServiceKey) {
         console.error('EDGE_FUNCTION_DEBUG: Missing env vars - SUPABASE_URL:', !!supabaseUrl, 'SERVICE_KEY:', !!supabaseServiceKey);
         return new Response(
-          JSON.stringify({ success: false, error: 'Variáveis de ambiente não configuradas.' }),
+          JSON.stringify({ success: false, error: 'Erro de configuração: variáveis de ambiente SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY não estão definidas.' }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
         );
       }
     } catch (envErr) {
       console.error('EDGE_FUNCTION_DEBUG: Error reading env vars:', envErr);
       return new Response(
-        JSON.stringify({ success: false, error: 'Erro ao acessar configurações.' }),
+        JSON.stringify({ success: false, error: 'Erro ao acessar configurações do ambiente.' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
       );
     }
@@ -58,7 +57,7 @@ serve(async (req) => {
     } catch (parseErr) {
       console.error('EDGE_FUNCTION_DEBUG: Error parsing JSON body:', parseErr);
       return new Response(
-        JSON.stringify({ success: false, error: 'JSON inválido no corpo da requisição.' }),
+        JSON.stringify({ success: false, error: 'O corpo da requisição não está em formato JSON válido.' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
       );
     }
@@ -69,7 +68,7 @@ serve(async (req) => {
     if (!name || !email || !password || !memberAreaId) {
       console.error('EDGE_FUNCTION_DEBUG: Incomplete data received for member creation.');
       return new Response(
-        JSON.stringify({ success: false, error: 'Dados incompletos para criar o membro (nome, email, senha, memberAreaId são obrigatórios).' }),
+        JSON.stringify({ success: false, error: 'Dados incompletos: nome, email, senha e memberAreaId são obrigatórios.' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
       );
     }
@@ -214,11 +213,54 @@ serve(async (req) => {
           member_area_id: memberAreaId,
           status: isActive ? 'active' : 'inactive',
         });
-      if (profileError && !profileError.message.includes('duplicate key')) {
-        console.error('EDGE_FUNCTION_DEBUG: Erro ao criar perfil em profiles:', profileError);
+      if (profileError) {
+        if (profileError.message && profileError.message.includes('duplicate key')) {
+          console.warn('EDGE_FUNCTION_DEBUG: Perfil já existe na tabela profiles.');
+        } else {
+          console.error('EDGE_FUNCTION_DEBUG: Erro ao criar perfil em profiles:', profileError);
+          return new Response(
+            JSON.stringify({ success: false, error: 'Erro ao criar perfil do usuário.' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+          );
+        }
       }
     } catch (profileCatchErr) {
       console.error('EDGE_FUNCTION_DEBUG: Exceção ao criar perfil em profiles:', profileCatchErr);
+      return new Response(
+        JSON.stringify({ success: false, error: 'Erro inesperado ao criar perfil do usuário.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      );
+    }
+
+    // Garantir que o membro seja criado na tabela 'members'
+    try {
+      const { error: memberError } = await supabase
+        .from('members')
+        .insert({
+          user_id: newUserId,
+          email,
+          name,
+          status: isActive ? 'active' : 'inactive',
+          member_area_id: memberAreaId
+          // Adicione outros campos obrigatórios conforme necessário (phone, checkout_id, payment_id, plan_type, etc)
+        });
+      if (memberError) {
+        if (memberError.message && memberError.message.includes('duplicate key')) {
+          console.warn('EDGE_FUNCTION_DEBUG: Membro já existe na tabela members.');
+        } else {
+          console.error('EDGE_FUNCTION_DEBUG: Erro ao criar membro em members:', memberError);
+          return new Response(
+            JSON.stringify({ success: false, error: 'Erro ao criar registro do membro.' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+          );
+        }
+      }
+    } catch (memberCatchErr) {
+      console.error('EDGE_FUNCTION_DEBUG: Exceção ao criar membro em members:', memberCatchErr);
+      return new Response(
+        JSON.stringify({ success: false, error: 'Erro inesperado ao criar registro do membro.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      );
     }
 
     // 2. Conceder acesso aos produtos
@@ -239,9 +281,9 @@ serve(async (req) => {
     );
 
   } catch (error: any) {
-    console.error('EDGE_FUNCTION_DEBUG: General error in create-member-user function:', error.message, 'Stack:', error.stack);
+    console.error('EDGE_FUNCTION_DEBUG: General error in create-member-user function:', error && error.message ? error.message : error, 'Stack:', error && error.stack ? error.stack : '');
     return new Response(
-      JSON.stringify({ success: false, error: error.message || 'Erro interno do servidor.' }),
+      JSON.stringify({ success: false, error: 'Erro inesperado ao criar usuário. Por favor, tente novamente ou contate o suporte.' }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
     );
   }

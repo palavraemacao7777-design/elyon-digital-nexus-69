@@ -311,32 +311,11 @@ serve(async (req) => {
         status: "active",
       }));
 
-      const { error: accessError } = await supabase
-        .from("member_access")
-        .upsert(memberAccessRecords, { onConflict: 'member_id,product_id' });
-
-      if (accessError) {
-        console.error("CREATE_MEMBER_DEBUG: Failed to grant product access", accessError);
-        throw new Error(`Failed to grant product access: ${accessError.message}`);
-      }
-
-      console.log("CREATE_MEMBER_DEBUG: Product access granted", {
-        memberId,
-          productCount: prodIds.length,
-      });
-    }
-
-      // ===== NOVO: Conceder acesso aos módulos das áreas de membros associadas aos produtos =====
-      try {
-        // Resolver member_area_ids a partir dos productIds
-        const memberAreaIdsSet = new Set<string>();
-        for (const pid of prodIds || []) {
-          if (!pid) continue;
-          try {
-            const { data: productRow, error: prodErr } = await supabase
-              .from('products')
-              .select('id, member_area_id')
-              .eq('id', pid)
+            const { error: insertErr } = await supabase
+              .from('member_access')
+              .upsert(insertsByMember, { onConflict: 'member_id,module_id' });
+            if (insertErr) throw insertErr;
+            console.log('CREATE_MEMBER_DEBUG: Acesso aos módulos concedido (member_id/module_id)', { memberId, moduleCount: moduleIds.length });
               .maybeSingle();
             if (prodErr) console.warn('CREATE_MEMBER_DEBUG: Erro ao buscar product durante resolução de member areas', prodErr);
             if (productRow?.member_area_id) memberAreaIdsSet.add(productRow.member_area_id);

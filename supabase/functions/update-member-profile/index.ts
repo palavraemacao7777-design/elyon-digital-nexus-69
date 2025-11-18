@@ -9,7 +9,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-serve(async (req) => {
+serve(async (req: Request) => {
   console.log('EDGE_FUNCTION_DEBUG: update-member-profile function started.');
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders, status: 200 });
@@ -56,31 +56,49 @@ serve(async (req) => {
     const { userId, memberId, name, status, memberAreaId, selectedProducts } = bodyData;
     console.log('EDGE_FUNCTION_DEBUG: Received data:', { userId, memberId, name, status, memberAreaId, selectedProducts });
 
-    if (!userId || !name || !status || !memberAreaId) {
+    if (!memberId && !userId) {
       console.error('EDGE_FUNCTION_DEBUG: Incomplete data received for member update.');
       return new Response(
-        JSON.stringify({ success: false, error: 'Dados incompletos para atualizar o membro (userId, name, status, memberAreaId são obrigatórios).' }),
+        JSON.stringify({ success: false, error: 'É obrigatório informar memberId ou userId.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      );
+    }
+    if (!name || !status || !memberAreaId) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Campos obrigatórios ausentes: name, status, memberAreaId.' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
       );
     }
 
-    // Se memberId não foi enviado, buscar na tabela members
+    // Buscar memberId se não enviado
     let actualMemberId = memberId;
-    if (!actualMemberId) {
+    if (!actualMemberId && userId) {
       const { data: memberData, error: memberError } = await supabase
         .from('members')
         .select('id')
         .eq('user_id', userId)
         .maybeSingle();
-      
-      if (memberError || !memberData) {
+      if (memberError) {
         console.error('EDGE_FUNCTION_DEBUG: Error fetching member:', memberError);
         return new Response(
-          JSON.stringify({ success: false, error: 'Membro não encontrado.' }),
+          JSON.stringify({ success: false, error: 'Erro ao buscar membro pelo userId.' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+        );
+      }
+      if (!memberData) {
+        console.error('EDGE_FUNCTION_DEBUG: Nenhum membro encontrado para user_id informado.');
+        return new Response(
+          JSON.stringify({ success: false, error: 'Nenhum membro encontrado para o userId informado. Envie o memberId diretamente se já possuir.' }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 404 }
         );
       }
       actualMemberId = memberData.id;
+    }
+    if (!actualMemberId) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Não foi possível determinar o memberId. Informe o memberId no payload.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      );
     }
     console.log('EDGE_FUNCTION_DEBUG: Using memberId:', actualMemberId);
 
@@ -162,7 +180,7 @@ serve(async (req) => {
       const { data: currentAccess, error: fetchAccessError } = await supabase
         .from('member_access')
         .select('id, product_id')
-        .eq('member_id', actualMemberId);
+        .eq('member_id', actualMemberId); // Correto: usar member_id
       
       if (fetchAccessError) {
         console.warn('EDGE_FUNCTION_DEBUG: Warning fetching current access:', fetchAccessError.message);

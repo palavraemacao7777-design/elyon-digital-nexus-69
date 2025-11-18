@@ -161,6 +161,66 @@ export interface Database {
           password_reset_body?: string
         }
       }
+      profiles: {
+        Row: {
+          user_id: string
+          name: string
+          email: string
+          status: string
+          created_at: string
+          member_area_id: string
+          avatar_url: string | null
+          role: string | null
+        }
+        Insert: {
+          user_id: string
+          name: string
+          email: string
+          status: string
+          created_at?: string
+          member_area_id: string
+          avatar_url?: string | null
+          role?: string | null
+        }
+        Update: {
+          user_id?: string
+          name?: string
+          email?: string
+          status?: string
+          created_at?: string
+          member_area_id?: string
+          avatar_url?: string | null
+          role?: string | null
+        }
+      }
+      member_access: {
+        Row: {
+          member_id: string
+          product_id: string
+        }
+        Insert: {
+          member_id: string
+          product_id: string
+        }
+        Update: {
+          member_id?: string
+          product_id?: string
+        }
+      }
+      members: {
+        Row: {
+          id: string
+          user_id: string
+        }
+        Insert: {
+          id: string
+          user_id: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+        }
+      }
     }
   }
 }

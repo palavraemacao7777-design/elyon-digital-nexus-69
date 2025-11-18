@@ -52,6 +52,13 @@ const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: {
     }
   }, [member, memberAreaId]);
 
+  // LOG: Envio dos produtos selecionados para a função Edge
+  useEffect(() => {
+    if (selectedProducts && selectedProducts.length > 0) {
+      console.log('DEBUG_SELECTED_PRODUCTS:', selectedProducts);
+    }
+  }, [selectedProducts]);
+
   const handleGeneratePassword = () => {
     const newPassword = Math.random().toString(36).slice(-8);
     setPassword(newPassword);
@@ -62,8 +69,25 @@ const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: {
     setLoading(true);
     try {
       if (member) {
-        console.log('MEMBER_FORM_DEBUG: Updating member:', { userId: member.user_id, memberId, name, status: isActive ? 'active' : 'inactive', memberAreaId, selectedProducts });
-        const { data, error: edgeFunctionError } = await supabase.functions.invoke('update-member-profile', {
+        console.log('DEBUG_HANDLE_SAVE: Dados enviados para update-member-profile:', {
+          userId: member.user_id,
+          memberId,
+          name,
+          status: isActive ? 'active' : 'inactive',
+          memberAreaId,
+          selectedProducts,
+        });
+        console.log('Dados enviados para update-member-profile:', {
+          userId: member.user_id,
+          memberId,
+          name,
+          status: isActive ? 'active' : 'inactive',
+          memberAreaId,
+          selectedProducts,
+        });
+
+        // Use upsert-member-profile which finds or creates the member and updates profile/accesses
+        const { data, error: edgeFunctionError } = await supabase.functions.invoke('upsert-member-profile', {
           body: {
             userId: member.user_id,
             memberId,
@@ -76,52 +100,58 @@ const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: {
         });
 
         if (edgeFunctionError) {
-          console.error('Error invoking update-member-profile Edge Function:', edgeFunctionError);
+          console.error('Erro ao invocar update-member-profile:', edgeFunctionError);
+          toast({
+            title: 'Erro na Função Edge',
+            description: `Erro ao atualizar membro: ${edgeFunctionError.message || 'Erro desconhecido.'}`,
+            variant: 'destructive',
+          });
           throw new Error(edgeFunctionError.message || 'Erro ao invocar função de atualização de membro.');
         }
 
         if (!data?.success) {
-          console.error('Edge Function returned error:', data?.error);
+          console.error('Erro retornado pela função Edge:', data?.error);
+          toast({
+            title: 'Erro na Atualização',
+            description: `Falha ao atualizar membro: ${data?.error || 'Erro desconhecido.'}`,
+            variant: 'destructive',
+          });
           throw new Error(data?.error || 'Falha na Edge Function ao atualizar membro.');
         }
 
         toast({ title: "Sucesso", description: "Membro atualizado com sucesso!" });
 
       } else {
-        if (!email || (!password && !generatePassword) || !name) {
+        if (!email || !name || !memberAreaId) {
           toast({ title: "Erro", description: "Preencha todos os campos obrigatórios.", variant: "destructive" });
           setLoading(false);
           return;
         }
 
-        const finalPassword = generatePassword ? password : password;
+        // Gera senha automática se não informada
+        let finalPassword = password;
         if (!finalPassword) {
-          toast({ title: "Erro", description: "A senha é obrigatória.", variant: "destructive" });
-          setLoading(false);
-          return;
+          finalPassword = Math.random().toString(36).slice(-10);
+          setPassword(finalPassword);
         }
 
-        const { data, error: edgeFunctionError } = await supabase.functions.invoke('create-member-user', {
+        // Usa endpoint automatizado para criar e atualizar membro e acessos
+        const { data, error: edgeFunctionError } = await supabase.functions.invoke('upsert-member-profile', {
           body: {
+            userId: undefined, // será criado automaticamente pelo backend
             name,
             email,
             password: finalPassword,
             memberAreaId,
             selectedProducts,
-            isActive,
+            status: isActive ? 'active' : 'inactive',
           },
           method: 'POST',
         });
 
         if (edgeFunctionError) {
-          console.error('Error invoking create-member-user Edge Function:', edgeFunctionError);
-          if (edgeFunctionError.status === 409) {
-            toast({ title: "Erro", description: "Este e-mail já está cadastrado.", variant: "destructive" });
-          } else if (edgeFunctionError.status === 400) {
-            toast({ title: "Erro", description: "A senha deve ter pelo menos 6 caracteres.", variant: "destructive" });
-          } else {
-            toast({ title: "Erro", description: edgeFunctionError.message || 'Erro ao invocar função de criação de membro.', variant: "destructive" });
-          }
+          console.error('Error invoking upsert-member-profile Edge Function:', edgeFunctionError);
+          toast({ title: "Erro", description: edgeFunctionError.message || 'Erro ao invocar função de criação de membro.', variant: "destructive" });
           setLoading(false);
           return;
         }
