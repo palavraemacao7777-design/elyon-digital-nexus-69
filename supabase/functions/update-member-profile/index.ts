@@ -86,13 +86,49 @@ serve(async (req: Request) => {
         );
       }
       if (!memberData) {
-        console.error('EDGE_FUNCTION_DEBUG: Nenhum membro encontrado para user_id informado.');
-        return new Response(
-          JSON.stringify({ success: false, error: 'Nenhum membro encontrado para o userId informado. Envie o memberId diretamente se já possuir.' }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 404 }
-        );
+        console.warn('EDGE_FUNCTION_DEBUG: Nenhum membro encontrado para user_id informado. Tentando criar automaticamente.');
+        // Tentar criar membro automaticamente vinculando user_id
+        try {
+          // Tentar recuperar email do profile (se existir)
+          const { data: profileInfo } = await supabase
+            .from('profiles')
+            .select('email, name')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          const memberInsertPayload: any = {
+            user_id: userId,
+            member_area_id: memberAreaId,
+            status: status || 'active',
+            name: name || (profileInfo?.name ?? null),
+          };
+          if (profileInfo?.email) memberInsertPayload.email = profileInfo.email;
+
+          const { data: newMember, error: createErr } = await supabase
+            .from('members')
+            .insert(memberInsertPayload)
+            .select('id')
+            .maybeSingle();
+
+          if (createErr || !newMember) {
+            console.error('EDGE_FUNCTION_DEBUG: Falha ao criar membro automaticamente:', createErr);
+            return new Response(
+              JSON.stringify({ success: false, error: 'Falha ao criar membro automaticamente.' }),
+              { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+            );
+          }
+          actualMemberId = newMember.id;
+          console.log('EDGE_FUNCTION_DEBUG: Membro criado automaticamente com id:', actualMemberId);
+        } catch (createEx) {
+          console.error('EDGE_FUNCTION_DEBUG: Exceção ao criar membro automaticamente:', createEx);
+          return new Response(
+            JSON.stringify({ success: false, error: 'Erro ao criar membro automaticamente.' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+          );
+        }
+      } else {
+        actualMemberId = memberData.id;
       }
-      actualMemberId = memberData.id;
     }
     if (!actualMemberId) {
       return new Response(

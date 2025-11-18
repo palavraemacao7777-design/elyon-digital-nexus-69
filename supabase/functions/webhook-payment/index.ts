@@ -99,9 +99,39 @@ serve(async (req) => {
           console.log('WEBHOOK_PAYMENT_DEBUG: Usuário já possui este produto:', externalReference);
         }
       } else {
-        // Se o perfil não existir, criar um novo usuário auth.users
+        // Se o perfil não existir, tentar obter senha fixa da configuração da área de membros e criar usuário auth.users
         console.log('WEBHOOK_PAYMENT_DEBUG: Perfil não encontrado, tentando criar novo usuário auth.users...');
-        const generatedPassword = generateRandomString(12);
+        // Tentar derivar member_area_id a partir do product (externalReference)
+        const { data: productRow, error: prodErr } = await supabase
+          .from('products')
+          .select('member_area_id')
+          .eq('id', externalReference)
+          .maybeSingle();
+
+        if (prodErr || !productRow?.member_area_id) {
+          console.error('WEBHOOK_PAYMENT_DEBUG: Não foi possível derivar member_area_id a partir do produto. Abortando criação de usuário.');
+          return new Response(
+            JSON.stringify({ success: false, error: 'Não foi possível determinar a área de membros para definir a senha.' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+          );
+        }
+
+        // Buscar senha fixa em member_settings
+        const { data: settingsRow, error: settingsErr } = await supabase
+          .from('member_settings')
+          .select('default_password_mode, default_fixed_password')
+          .eq('member_area_id', productRow.member_area_id)
+          .maybeSingle();
+
+        if (settingsErr || !settingsRow || settingsRow.default_password_mode !== 'fixed' || !settingsRow.default_fixed_password) {
+          console.error('WEBHOOK_PAYMENT_DEBUG: Senha fixa não configurada para a área de membros do produto. Abortando criação de usuário.');
+          return new Response(
+            JSON.stringify({ success: false, error: 'Senha fixa não configurada para a área de membros do produto.' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+          );
+        }
+
+        const generatedPassword = settingsRow.default_fixed_password;
         const { data: newUserAuth, error: userAuthErr } = await supabase.auth.admin.createUser({
           email: customerEmail,
           password: generatedPassword,

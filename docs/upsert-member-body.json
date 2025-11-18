@@ -1,0 +1,10 @@
+{
+  "user_id": "45a62613-fcf4-4e6e-a058-5d092064bb40",
+  "name": "Nome Completo",
+  "email": "usuario@example.com",
+  "phone": "+55 11 9XXXX-XXXX",
+  "checkout_id": "checkout_abc123",
+  "member_area_id": "area_123",
+  "selectedProducts": ["prod_1", "prod_2"],
+  "status": "active"
+}

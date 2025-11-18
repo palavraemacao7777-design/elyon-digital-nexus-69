@@ -123,11 +123,14 @@ serve(async (req: Request) => {
           .eq('member_area_id', product.member_area_id)
           .maybeSingle();
 
-        let password = await generatePassword();
-        if (settings?.default_password_mode === 'fixed' && settings.default_fixed_password) {
-          password = settings.default_fixed_password;
+        // Usar apenas senha fixa configurada; se não houver, pular essa compra
+        if (!(settings?.default_password_mode === 'fixed' && settings.default_fixed_password)) {
+          console.warn(`  ⚠️  Senha fixa não configurada para area ${product.member_area_id}, pulando compra ${compra.id}`);
+          erros++;
+          continue;
         }
 
+        const password = settings.default_fixed_password;
         const passwordHash = await hashPassword(password);
 
         // 5️⃣ Criar usuário auth

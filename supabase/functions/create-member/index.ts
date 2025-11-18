@@ -121,22 +121,21 @@ serve(async (req) => {
         console.error('CREATE_MEMBER_DEBUG: Error fetching settings', settingsError);
       }
 
-      // Determine password based on mode
+      // Determine password based on mode: USE ONLY fixed password from member_settings
       let password = '';
       let forceChangePassword = false;
 
       if (settingsData && settingsData.default_password_mode) {
         const mode = settingsData.default_password_mode || 'random';
-        if (mode === 'fixed') {
-          password = settingsData.default_fixed_password || generateRandomPassword();
-        } else if (mode === 'force_change') {
-          password = generateRandomPassword();
-          forceChangePassword = true;
+        if (mode === 'fixed' && settingsData.default_fixed_password) {
+          password = settingsData.default_fixed_password;
         } else {
-          password = generateRandomPassword();
+          console.error('CREATE_MEMBER_DEBUG: Fixed default password not configured for this member area.');
+          return new Response(JSON.stringify({ success: false, error: 'Senha fixa não configurada para esta área de membros.' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 });
         }
       } else {
-        password = generateRandomPassword();
+        console.error('CREATE_MEMBER_DEBUG: member_settings missing or not configured for this member area.');
+        return new Response(JSON.stringify({ success: false, error: 'Senha fixa não configurada para esta área de membros.' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 });
       }
 
     console.log("CREATE_MEMBER_DEBUG: Password mode determined", {

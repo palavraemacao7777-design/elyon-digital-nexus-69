@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS public.members (
   email text UNIQUE NOT NULL,
   phone text,
   password_hash text NOT NULL,
-  checkout_id uuid NOT NULL,
+  checkout_id uuid,
   payment_id uuid,
   plan_type text CHECK (plan_type IN ('essencial', 'avançado', 'premium', 'oferta_unica')),
   status text DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'suspended')),

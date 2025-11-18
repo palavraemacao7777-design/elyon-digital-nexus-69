@@ -73,12 +73,17 @@ serve(async (req: Request) => {
       .eq('member_area_id', memberAreaId)
       .maybeSingle();
 
-    let password = await generatePassword();
+    // Use only fixed password configured in member_settings. Error if not configured.
+    let password = '';
     if (settingsData?.default_password_mode === 'fixed' && settingsData.default_fixed_password) {
       password = settingsData.default_fixed_password;
       console.log('🔐 CREATE_MEMBER_FROM_PAYMENT: Usando senha fixa configurada');
     } else {
-      console.log('🔐 CREATE_MEMBER_FROM_PAYMENT: Gerando senha aleatória');
+      console.error('🔐 CREATE_MEMBER_FROM_PAYMENT: Senha fixa não configurada para esta área de membros');
+      return new Response(
+        JSON.stringify({ success: false, error: 'Senha fixa não configurada para esta área de membros.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      );
     }
 
     const passwordHash = await hashPassword(password);

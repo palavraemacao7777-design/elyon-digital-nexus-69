@@ -25,8 +25,7 @@ type Product = Tables<'products'> & { title?: string };
 const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: { member?: Profile, onSave: () => void, products: Product[], memberAreaId: string, onClose: () => void }) => {
   const [name, setName] = useState(member?.name || '');
   const [email, setEmail] = useState(member?.email || '');
-  const [password, setPassword] = useState('');
-  const [generatePassword, setGeneratePassword] = useState(false);
+  // senha removida do formulário: senha será definida pela configuração da área de membros
   const [isActive, setIsActive] = useState(member?.status === 'active');
   const [memberId, setMemberId] = useState(member?.members?.[0]?.id || '');
   const [selectedProducts, setSelectedProducts] = useState<string[]>(member?.member_access?.map((ma: any) => ma.product_id) || []);
@@ -44,8 +43,6 @@ const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: {
     } else {
       setName('');
       setEmail('');
-      setPassword('');
-      setGeneratePassword(false);
       setIsActive(true);
       setMemberId('');
       setSelectedProducts([]);
@@ -59,44 +56,34 @@ const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: {
     }
   }, [selectedProducts]);
 
-  const handleGeneratePassword = () => {
-    const newPassword = Math.random().toString(36).slice(-8);
-    setPassword(newPassword);
-    setGeneratePassword(true);
-  };
+  // senha gerada/fornecida não é mais usada pelo frontend
 
   const handleSave = async () => {
     setLoading(true);
     try {
-      if (member) {
-        console.log('DEBUG_HANDLE_SAVE: Dados enviados para update-member-profile:', {
-          userId: member.user_id,
-          memberId,
+        if (member) {
+        console.log('DEBUG_HANDLE_SAVE: Dados enviados para upsert-member-profile (server resolves ids):', {
+          email: member.email,
           name,
           status: isActive ? 'active' : 'inactive',
-          memberAreaId,
+          member_area_id: memberAreaId,
           selectedProducts,
-        });
-        console.log('Dados enviados para update-member-profile:', {
-          userId: member.user_id,
-          memberId,
-          name,
-          status: isActive ? 'active' : 'inactive',
-          memberAreaId,
-          selectedProducts,
+          user_id: member.user_id,
         });
 
         // Use upsert-member-profile which finds or creates the member and updates profile/accesses
         const { data, error: edgeFunctionError } = await supabase.functions.invoke('upsert-member-profile', {
-          body: {
-            userId: member.user_id,
-            memberId,
+          body: JSON.stringify({
+            email: member.email,
             name,
             status: isActive ? 'active' : 'inactive',
-            memberAreaId,
+            memberAreaId: memberAreaId,
+            member_area_id: memberAreaId,
             selectedProducts,
-          },
+            user_id: member.user_id,
+          }),
           method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
         });
 
         if (edgeFunctionError) {
@@ -127,26 +114,19 @@ const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: {
           setLoading(false);
           return;
         }
-
-        // Gera senha automática se não informada
-        let finalPassword = password;
-        if (!finalPassword) {
-          finalPassword = Math.random().toString(36).slice(-10);
-          setPassword(finalPassword);
-        }
-
         // Usa endpoint automatizado para criar e atualizar membro e acessos
+        // NÃO envia senha: backend irá aplicar a senha configurada em member_settings
         const { data, error: edgeFunctionError } = await supabase.functions.invoke('upsert-member-profile', {
-          body: {
-            userId: undefined, // será criado automaticamente pelo backend
-            name,
+          body: JSON.stringify({
             email,
-            password: finalPassword,
+            name,
             memberAreaId,
+            member_area_id: memberAreaId,
             selectedProducts,
             status: isActive ? 'active' : 'inactive',
-          },
+          }),
           method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
         });
 
         if (edgeFunctionError) {
@@ -191,16 +171,7 @@ const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: {
           <Label htmlFor="email">Email</Label>
           <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required disabled={!!member} />
         </div>
-        {!member && (
-          <div className="space-y-2">
-            <Label htmlFor="password">Senha</Label>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <Input id="password" type="text" value={password} onChange={(e) => setPassword(e.target.value)} required={!generatePassword} disabled={generatePassword} className="flex-1" />
-              <Button type="button" variant="outline" onClick={handleGeneratePassword} className="w-full sm:w-auto">Gerar</Button>
-            </div>
-            {generatePassword && <p className="text-sm text-muted-foreground">Senha gerada: {password}</p>}
-          </div>
-        )}
+        {/* password field removed: UI does not show password note */}
         <div className="flex items-center justify-between">
           <Label htmlFor="isActive">Ativo</Label>
           <Switch id="isActive" checked={isActive} onCheckedChange={setIsActive} />
