@@ -25,7 +25,8 @@ type Product = Tables<'products'> & { title?: string };
 const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: { member?: Profile, onSave: () => void, products: Product[], memberAreaId: string, onClose: () => void }) => {
   const [name, setName] = useState(member?.name || '');
   const [email, setEmail] = useState(member?.email || '');
-  // senha removida do formulário: senha será definida pela configuração da área de membros
+  const [password, setPassword] = useState('');
+  const [generatePassword, setGeneratePassword] = useState(false);
   const [isActive, setIsActive] = useState(member?.status === 'active');
   const [memberId, setMemberId] = useState(member?.members?.[0]?.id || '');
   const [selectedProducts, setSelectedProducts] = useState<string[]>(member?.member_access?.map((ma: any) => ma.product_id) || []);
@@ -43,6 +44,8 @@ const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: {
     } else {
       setName('');
       setEmail('');
+      setPassword('');
+      setGeneratePassword(false);
       setIsActive(true);
       setMemberId('');
       setSelectedProducts([]);
@@ -56,34 +59,43 @@ const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: {
     }
   }, [selectedProducts]);
 
-  // senha gerada/fornecida não é mais usada pelo frontend
+  const handleGeneratePassword = () => {
+    const newPassword = Math.random().toString(36).slice(-8);
+    setPassword(newPassword);
+    setGeneratePassword(true);
+  };
 
   const handleSave = async () => {
     setLoading(true);
     try {
-        if (member) {
-        console.log('DEBUG_HANDLE_SAVE: Dados enviados para upsert-member-profile (server resolves ids):', {
-          email: member.email,
+      if (member) {
+        console.log('DEBUG_HANDLE_SAVE: Dados enviados para update-member-profile:', {
+          userId: member.user_id,
+          memberId,
           name,
           status: isActive ? 'active' : 'inactive',
-          member_area_id: memberAreaId,
+          memberAreaId,
           selectedProducts,
-          user_id: member.user_id,
+        });
+        console.log('Dados enviados para update-member-profile:', {
+          userId: member.user_id,
+          memberId,
+          name,
+          status: isActive ? 'active' : 'inactive',
+          memberAreaId,
+          selectedProducts,
         });
 
-        // Use upsert-member-profile which finds or creates the member and updates profile/accesses
-        const { data, error: edgeFunctionError } = await supabase.functions.invoke('upsert-member-profile', {
-          body: JSON.stringify({
-            email: member.email,
+        const { data, error: edgeFunctionError } = await supabase.functions.invoke('update-member-profile', {
+          body: {
+            userId: member.user_id,
+            memberId,
             name,
             status: isActive ? 'active' : 'inactive',
-            memberAreaId: memberAreaId,
-            member_area_id: memberAreaId,
+            memberAreaId,
             selectedProducts,
-            user_id: member.user_id,
-          }),
+          },
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
         });
 
         if (edgeFunctionError) {
@@ -109,29 +121,40 @@ const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: {
         toast({ title: "Sucesso", description: "Membro atualizado com sucesso!" });
 
       } else {
-        if (!email || !name || !memberAreaId) {
+        if (!email || (!password && !generatePassword) || !name) {
           toast({ title: "Erro", description: "Preencha todos os campos obrigatórios.", variant: "destructive" });
           setLoading(false);
           return;
         }
-        // Usa endpoint automatizado para criar e atualizar membro e acessos
-        // NÃO envia senha: backend irá aplicar a senha configurada em member_settings
-        const { data, error: edgeFunctionError } = await supabase.functions.invoke('upsert-member-profile', {
-          body: JSON.stringify({
-            email,
+
+        const finalPassword = generatePassword ? password : password;
+        if (!finalPassword) {
+          toast({ title: "Erro", description: "A senha é obrigatória.", variant: "destructive" });
+          setLoading(false);
+          return;
+        }
+
+        const { data, error: edgeFunctionError } = await supabase.functions.invoke('create-member-user', {
+          body: {
             name,
+            email,
+            password: finalPassword,
             memberAreaId,
-            member_area_id: memberAreaId,
             selectedProducts,
-            status: isActive ? 'active' : 'inactive',
-          }),
+            isActive,
+          },
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
         });
 
         if (edgeFunctionError) {
-          console.error('Error invoking upsert-member-profile Edge Function:', edgeFunctionError);
-          toast({ title: "Erro", description: edgeFunctionError.message || 'Erro ao invocar função de criação de membro.', variant: "destructive" });
+          console.error('Error invoking create-member-user Edge Function:', edgeFunctionError);
+          if (edgeFunctionError.status === 409) {
+            toast({ title: "Erro", description: "Este e-mail já está cadastrado.", variant: "destructive" });
+          } else if (edgeFunctionError.status === 400) {
+            toast({ title: "Erro", description: "A senha deve ter pelo menos 6 caracteres.", variant: "destructive" });
+          } else {
+            toast({ title: "Erro", description: edgeFunctionError.message || 'Erro ao invocar função de criação de membro.', variant: "destructive" });
+          }
           setLoading(false);
           return;
         }
@@ -171,7 +194,16 @@ const MemberFormDialog = ({ member, onSave, products, memberAreaId, onClose }: {
           <Label htmlFor="email">Email</Label>
           <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required disabled={!!member} />
         </div>
-        {/* password field removed: UI does not show password note */}
+        {!member && (
+          <div className="space-y-2">
+            <Label htmlFor="password">Senha</Label>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <Input id="password" type="text" value={password} onChange={(e) => setPassword(e.target.value)} required={!generatePassword} disabled={generatePassword} className="flex-1" />
+              <Button type="button" variant="outline" onClick={handleGeneratePassword} className="w-full sm:w-auto">Gerar</Button>
+            </div>
+            {generatePassword && <p className="text-sm text-muted-foreground">Senha gerada: {password}</p>}
+          </div>
+        )}
         <div className="flex items-center justify-between">
           <Label htmlFor="isActive">Ativo</Label>
           <Switch id="isActive" checked={isActive} onCheckedChange={setIsActive} />
